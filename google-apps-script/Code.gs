@@ -57,6 +57,13 @@ const SHEETS = {
       "fechaCreacionRegistro", "fechaSincronizacion",
     ],
   },
+  ajusteSiloBolsa: {
+    name: "Ajustes Silo Bolsa",
+    headers: [
+      "id", "fecha", "siloBolsaNombre", "cultivo", "kgTotalInicial", "kgTotalRetirado",
+      "diferenciaKg", "tipoDiferencia", "observaciones", "fechaCreacionRegistro", "fechaSincronizacion",
+    ],
+  },
 };
 
 // Pestañas de maestros: las edita la persona directamente en la Sheet.

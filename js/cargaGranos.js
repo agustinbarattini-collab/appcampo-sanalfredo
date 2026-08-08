@@ -1,7 +1,8 @@
 import { dbGetAll, dbGet, dbPut, dbDelete, uid } from "./db.js";
-import { getSilosBolsaConStock } from "./stockUtils.js";
+import { getSilosBolsaConStock, getStockGranosPorCultivo } from "./stockUtils.js";
 
 const STORE = "cargasGranos";
+const STORE_AJUSTES = "ajustesSiloBolsa";
 
 function nowLocalDatetime() {
   const d = new Date();
@@ -17,7 +18,10 @@ async function poblarOrigenSelect(select, tipo) {
       select.innerHTML += `<option value="${l.id}">${l.nombre}</option>`;
     }
   } else if (tipo === "silo") {
-    const silos = (await getSilosBolsaConStock()).sort((a, b) => a.nombre.localeCompare(b.nombre));
+    // Los silos finalizados o en 0 no se ofrecen como origen.
+    const silos = (await getSilosBolsaConStock())
+      .filter((s) => s.kgResidual > 0)
+      .sort((a, b) => a.nombre.localeCompare(b.nombre));
     for (const s of silos) {
       select.innerHTML += `<option value="${s.id}">${s.nombre} — ${s.kgResidual} kg restantes${s.cultivo ? ` (${s.cultivo})` : ""}</option>`;
     }
@@ -30,12 +34,64 @@ async function poblarCorredorSelect(select) {
     corredores.map((c) => `<option value="${c.id}">${c.nombre}</option>`).join("");
 }
 
+function renderStockGranosCard(container, stock) {
+  const el = container.querySelector("#stockGranosCard");
+  if (!el) return;
+  el.innerHTML = `
+    <h2 style="margin-top:0;">Stock de granos (Silos Bolsa)</h2>
+    ${
+      stock.length === 0
+        ? '<div class="empty-state">No queda stock positivo en silos bolsa activos.</div>'
+        : `<div style="display:flex; flex-wrap:wrap; gap:8px;">
+            ${stock.map((s) => `<div class="pill">${s.cultivo}: ${s.kg.toLocaleString("es-AR")} kg</div>`).join("")}
+          </div>`
+    }
+  `;
+}
+
+// Marca el silo bolsa como finalizado (stock queda en 0, desaparece de la lista
+// de orígenes) y registra la diferencia entre lo que la app calculaba como
+// residual y lo que realmente se retiró en este último camión. diferenciaKg
+// positiva = faltante (se sacó menos de lo que decía la app, mermó en el camino);
+// negativa = sobrante (se sacó más de lo esperado).
+async function finalizarSiloBolsa(siloId, kgResidualAntes, kgEsteViaje, fechaCarga) {
+  const silo = await dbGet("silosBolsa", siloId);
+  if (!silo) return null;
+  const diferenciaKg = Math.round((kgResidualAntes - kgEsteViaje) * 100) / 100;
+  await dbPut("silosBolsa", { ...silo, finalizado: true, fechaFinalizacion: new Date().toISOString() });
+  const ajuste = {
+    id: uid(),
+    fecha: fechaCarga,
+    siloBolsaNombre: silo.nombre,
+    cultivo: silo.cultivo || "",
+    kgTotalInicial: silo.kgTotalInicial || 0,
+    kgTotalRetirado: Math.round(((silo.kgTotalInicial || 0) - diferenciaKg) * 100) / 100,
+    diferenciaKg,
+    tipoDiferencia: diferenciaKg > 0 ? "faltante" : diferenciaKg < 0 ? "sobrante" : "exacto",
+    observaciones: "",
+    sincronizado: false,
+    fechaCreacionRegistro: new Date().toISOString(),
+  };
+  await dbPut(STORE_AJUSTES, ajuste);
+  return ajuste;
+}
+
+function mensajeAjuste(ajuste) {
+  if (!ajuste) return "";
+  if (ajuste.tipoDiferencia === "exacto") {
+    return `Silo "${ajuste.siloBolsaNombre}" finalizado. Coincidió exacto con lo calculado, sin diferencia.`;
+  }
+  const palabra = ajuste.tipoDiferencia === "faltante" ? "faltante" : "sobrante";
+  return `Silo "${ajuste.siloBolsaNombre}" finalizado. Diferencia registrada: ${Math.abs(ajuste.diferenciaKg).toLocaleString("es-AR")} kg de ${palabra}.`;
+}
+
 const cargaGranosView = {
   async render(container) {
-    const [lotes, silos, corredores] = await Promise.all([
+    const [lotes, silos, corredores, stockGranos] = await Promise.all([
       dbGetAll("lotes"),
       dbGetAll("silosBolsa"),
       dbGetAll("corredores"),
+      getStockGranosPorCultivo(),
     ]);
 
     if (lotes.length === 0 && silos.length === 0) {
@@ -59,6 +115,7 @@ const cargaGranosView = {
 
     container.innerHTML = `
       <h2>Carga de Granos de Campo</h2>
+      ${silos.length > 0 ? '<div class="card" id="stockGranosCard"></div>' : ""}
       <div class="card">
         <form id="formCarga">
           <div class="field">
@@ -75,6 +132,9 @@ const cargaGranosView = {
               </select>
               <select id="fOrigenId" required></select>
             </div>
+            <div class="field hidden" id="bloqueFinalizarOrigen1" style="margin-top:6px;">
+              <label class="checkbox-field"><input type="checkbox" id="fFinalizarOrigen1" /> Este es el último camión de este silo bolsa — finalizarlo</label>
+            </div>
             <button type="button" class="secondary" id="btnToggleOrigen2" style="margin-top:8px;">+ Agregar 2do origen</button>
           </div>
 
@@ -89,17 +149,21 @@ const cargaGranosView = {
             </div>
             <label style="margin-top:8px;">Kg netos que vinieron del segundo origen</label>
             <input type="number" step="1" id="fKgOrigen2" placeholder="Ej: 8000" />
+            <div class="field hidden" id="bloqueFinalizarOrigen2" style="margin-top:6px;">
+              <label class="checkbox-field"><input type="checkbox" id="fFinalizarOrigen2" /> Este es el último camión de este silo bolsa — finalizarlo</label>
+            </div>
             <button type="button" class="secondary" id="btnQuitarOrigen2" style="margin-top:8px;">Quitar segundo origen</button>
           </div>
 
-          <div class="field">
-            <label>Cultivo</label>
-            <input type="text" id="fCultivo" placeholder="Soja, Maíz, Trigo..." required />
-          </div>
-
-          <div class="field">
-            <label>N° de CTG</label>
-            <input type="text" id="fCtg" />
+          <div class="row">
+            <div class="field">
+              <label style="font-size:0.8rem;">Cultivo</label>
+              <input type="text" id="fCultivo" placeholder="Soja, Maíz..." required style="padding:6px 8px; font-size:0.9rem;" />
+            </div>
+            <div class="field">
+              <label>N° de CTG</label>
+              <input type="text" id="fCtg" />
+            </div>
           </div>
 
           <div class="row">
@@ -155,12 +219,37 @@ const cargaGranosView = {
       <div class="card" id="listaCargas"></div>
     `;
 
+    if (silos.length > 0) renderStockGranosCard(container, stockGranos);
+
     let gps = null;
 
     const origenTipoSel = container.querySelector("#fOrigenTipo");
     const origenIdSel = container.querySelector("#fOrigenId");
-    await poblarOrigenSelect(origenIdSel, origenTipoSel.value);
-    origenTipoSel.addEventListener("change", () => poblarOrigenSelect(origenIdSel, origenTipoSel.value));
+    const bloqueFinalizarOrigen1 = container.querySelector("#bloqueFinalizarOrigen1");
+    const fFinalizarOrigen1 = container.querySelector("#fFinalizarOrigen1");
+    const fCultivo = container.querySelector("#fCultivo");
+
+    async function actualizarOrigen1() {
+      await poblarOrigenSelect(origenIdSel, origenTipoSel.value);
+      bloqueFinalizarOrigen1.classList.toggle("hidden", origenTipoSel.value !== "silo");
+      fFinalizarOrigen1.checked = false;
+    }
+    await actualizarOrigen1();
+    origenTipoSel.addEventListener("change", actualizarOrigen1);
+
+    async function autocompletarCultivo(tipo, id) {
+      if (!id) return;
+      let cultivo = "";
+      if (tipo === "lote") {
+        const lote = await dbGet("lotes", id);
+        cultivo = lote?.cultivo || "";
+      } else {
+        const silosStock = await getSilosBolsaConStock();
+        cultivo = silosStock.find((s) => s.id === id)?.cultivo || "";
+      }
+      if (cultivo) fCultivo.value = cultivo;
+    }
+    origenIdSel.addEventListener("change", () => autocompletarCultivo(origenTipoSel.value, origenIdSel.value));
 
     const bloqueOrigen2 = container.querySelector("#bloqueOrigen2");
     const btnToggleOrigen2 = container.querySelector("#btnToggleOrigen2");
@@ -168,13 +257,20 @@ const cargaGranosView = {
     const origen2TipoSel = container.querySelector("#fOrigen2Tipo");
     const origen2IdSel = container.querySelector("#fOrigen2Id");
     const fKgOrigen2 = container.querySelector("#fKgOrigen2");
+    const bloqueFinalizarOrigen2 = container.querySelector("#bloqueFinalizarOrigen2");
+    const fFinalizarOrigen2 = container.querySelector("#fFinalizarOrigen2");
     let origen2Activo = false;
 
+    async function actualizarOrigen2() {
+      await poblarOrigenSelect(origen2IdSel, origen2TipoSel.value);
+      bloqueFinalizarOrigen2.classList.toggle("hidden", origen2TipoSel.value !== "silo");
+      fFinalizarOrigen2.checked = false;
+    }
     async function activarOrigen2() {
       origen2Activo = true;
       bloqueOrigen2.classList.remove("hidden");
       btnToggleOrigen2.classList.add("hidden");
-      await poblarOrigenSelect(origen2IdSel, origen2TipoSel.value);
+      await actualizarOrigen2();
     }
     function desactivarOrigen2() {
       origen2Activo = false;
@@ -182,10 +278,11 @@ const cargaGranosView = {
       btnToggleOrigen2.classList.remove("hidden");
       origen2IdSel.value = "";
       fKgOrigen2.value = "";
+      fFinalizarOrigen2.checked = false;
     }
     btnToggleOrigen2.addEventListener("click", activarOrigen2);
     btnQuitarOrigen2.addEventListener("click", desactivarOrigen2);
-    origen2TipoSel.addEventListener("change", () => poblarOrigenSelect(origen2IdSel, origen2TipoSel.value));
+    origen2TipoSel.addEventListener("change", actualizarOrigen2);
 
     await poblarCorredorSelect(container.querySelector("#fCorredorId"));
 
@@ -242,10 +339,12 @@ const cargaGranosView = {
       const kgOrigen1 = neto - kgOrigen2;
 
       let origenNombre = "";
+      let silo1KgResidual = null;
       if (origenTipoSel.value === "silo") {
         const silosStock = await getSilosBolsaConStock();
         const silo = silosStock.find((s) => s.id === origenId);
         origenNombre = silo ? silo.nombre : "";
+        silo1KgResidual = silo ? silo.kgResidual : 0;
         if (silo && kgOrigen1 > silo.kgResidual) {
           const continuar = confirm(
             `El silo bolsa "${silo.nombre}" tiene ${silo.kgResidual} kg residuales y estás cargando ${kgOrigen1} kg.\n¿Confirmás igual? (puede deberse a una merma no registrada)`
@@ -259,12 +358,14 @@ const cargaGranosView = {
 
       let origen2Nombre = "";
       let origen2Tipo = "";
+      let silo2KgResidual = null;
       if (origen2Activo) {
         origen2Tipo = origen2TipoSel.value;
         if (origen2Tipo === "silo") {
           const silosStock2 = await getSilosBolsaConStock();
           const silo2 = silosStock2.find((s) => s.id === origen2Id);
           origen2Nombre = silo2 ? silo2.nombre : "";
+          silo2KgResidual = silo2 ? silo2.kgResidual : 0;
           if (silo2 && kgOrigen2 > silo2.kgResidual) {
             const continuar2 = confirm(
               `El silo bolsa "${silo2.nombre}" tiene ${silo2.kgResidual} kg residuales y estás cargando ${kgOrigen2} kg desde ahí.\n¿Confirmás igual? (puede deberse a una merma no registrada)`
@@ -286,9 +387,11 @@ const cargaGranosView = {
         fotoBlob = fotoInput.files[0];
       }
 
+      const fecha = container.querySelector("#fFecha").value;
+
       const registro = {
         id: uid(),
-        fecha: container.querySelector("#fFecha").value,
+        fecha,
         origenTipo: origenTipoSel.value,
         origenId,
         origenNombre,
@@ -296,7 +399,7 @@ const cargaGranosView = {
         origen2Id: origen2Activo ? origen2Id : "",
         origen2Nombre,
         kgOrigen2,
-        cultivo: container.querySelector("#fCultivo").value.trim(),
+        cultivo: fCultivo.value.trim(),
         ctg: container.querySelector("#fCtg").value.trim(),
         chofer: container.querySelector("#fChofer").value.trim(),
         patente: container.querySelector("#fPatente").value.trim(),
@@ -314,7 +417,22 @@ const cargaGranosView = {
       };
 
       await dbPut(STORE, registro);
+
+      const mensajesAjuste = [];
+      if (origenTipoSel.value === "silo" && fFinalizarOrigen1.checked) {
+        const ajuste = await finalizarSiloBolsa(origenId, silo1KgResidual || 0, kgOrigen1, fecha);
+        mensajesAjuste.push(mensajeAjuste(ajuste));
+      }
+      if (origen2Activo && origen2TipoSel.value === "silo" && fFinalizarOrigen2.checked) {
+        const ajuste2 = await finalizarSiloBolsa(origen2Id, silo2KgResidual || 0, kgOrigen2, fecha);
+        mensajesAjuste.push(mensajeAjuste(ajuste2));
+      }
+
       window.dispatchEvent(new Event("appcampo-sync-now"));
+
+      if (mensajesAjuste.length > 0) {
+        alert(mensajesAjuste.join("\n\n"));
+      }
 
       this.render(container);
     });

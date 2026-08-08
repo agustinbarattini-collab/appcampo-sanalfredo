@@ -10,8 +10,27 @@ async function getSilosBolsaConStock() {
       if (c.origenTipo === "silo" && c.origenId === s.id) usado += kgOrigen1;
       if (c.origen2Tipo === "silo" && c.origen2Id === s.id) usado += kgOrigen2;
     }
-    return { ...s, kgUsado: usado, kgResidual: Math.max(0, (s.kgTotalInicial || 0) - usado) };
+    // Un silo finalizado queda en 0 aunque el cálculo teórico diera otro número
+    // (la diferencia real ya quedó registrada como ajuste al finalizarlo).
+    const kgResidual = s.finalizado ? 0 : Math.max(0, (s.kgTotalInicial || 0) - usado);
+    return { ...s, kgUsado: usado, kgResidual };
   });
+}
+
+// Stock total de grano embolsado por cultivo, sumando todos los silos bolsa
+// activos (no finalizados) con saldo positivo. Para el visor general de
+// Carga de Granos.
+async function getStockGranosPorCultivo() {
+  const silos = await getSilosBolsaConStock();
+  const porCultivo = {};
+  for (const s of silos) {
+    if (s.kgResidual <= 0) continue;
+    const key = s.cultivo?.trim() || "Sin cultivo";
+    porCultivo[key] = (porCultivo[key] || 0) + s.kgResidual;
+  }
+  return Object.entries(porCultivo)
+    .map(([cultivo, kg]) => ({ cultivo, kg }))
+    .sort((a, b) => a.cultivo.localeCompare(b.cultivo));
 }
 
 async function getInsumosConStock() {
@@ -93,4 +112,11 @@ async function getAvancePlanes() {
   });
 }
 
-export { getSilosBolsaConStock, getInsumosConStock, getSaldoOrden, getCuentaContratistas, getAvancePlanes };
+export {
+  getSilosBolsaConStock,
+  getStockGranosPorCultivo,
+  getInsumosConStock,
+  getSaldoOrden,
+  getCuentaContratistas,
+  getAvancePlanes,
+};

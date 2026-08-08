@@ -1,7 +1,7 @@
 import { APP_CONFIG } from "./config.js";
 
 const DB_NAME = `appcampo_${APP_CONFIG.empresaId}`;
-const DB_VERSION = 6;
+const DB_VERSION = 7;
 
 const STORES = {
   lotes: "id",
@@ -17,6 +17,7 @@ const STORES = {
   avanceSiembra: "id",
   cierresSiembra: "id",
   planSiembra: "id",
+  ajustesSiloBolsa: "id",
 };
 
 const STORES_ELIMINADOS = ["productosSiembra"];

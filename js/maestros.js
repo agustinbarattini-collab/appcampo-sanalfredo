@@ -72,6 +72,7 @@ const lotesView = renderMaestroSimple({
   store: "lotes",
   titulo: "Lotes",
   campoLabel: "Nombre del lote",
+  extraFields: [{ key: "cultivo", label: "Cultivo actual (opcional)", type: "text" }],
 });
 
 const corredoresView = renderMaestroSimple({
@@ -132,17 +133,30 @@ const silosBolsaView = {
       row.className = "list-item";
       row.innerHTML = `
         <div>
-          <div><strong>${s.nombre}</strong></div>
+          <div><strong>${s.nombre}</strong> ${s.finalizado ? '<span class="pill sincronizado">Finalizado</span>' : ""}</div>
           <div class="muted">${s.cultivo ? s.cultivo + " · " : ""}${s.kgResidual} kg restantes de ${s.kgTotalInicial} kg</div>
         </div>
-        <button class="secondary" data-id="${s.id}">Borrar</button>
+        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
+          ${s.finalizado ? '<button class="secondary" data-accion="reactivar" data-id="' + s.id + '">Reactivar</button>' : ""}
+          <button class="secondary" data-accion="borrar" data-id="${s.id}">Borrar</button>
+        </div>
       `;
-      row.querySelector("button").addEventListener("click", async () => {
+      row.querySelector('[data-accion="borrar"]').addEventListener("click", async () => {
         if (confirm(`¿Borrar "${s.nombre}"? Esto no borra las cargas ya registradas desde este silo.`)) {
           await dbDelete("silosBolsa", s.id);
           this.render(container);
         }
       });
+      const btnReactivar = row.querySelector('[data-accion="reactivar"]');
+      if (btnReactivar) {
+        btnReactivar.addEventListener("click", async () => {
+          if (confirm(`¿Reactivar "${s.nombre}"? Va a volver a aparecer como origen disponible en Carga de Granos.`)) {
+            const { finalizado, fechaFinalizacion, kgUsado, kgResidual, ...base } = s;
+            await dbPut("silosBolsa", base);
+            this.render(container);
+          }
+        });
+      }
       listaContainer.appendChild(row);
     }
 

@@ -33,12 +33,17 @@ function flattenCierre(r) {
   return { ...r };
 }
 
+function flattenAjusteSiloBolsa(r) {
+  return { ...r };
+}
+
 const TIPOS = [
   { store: "cargasGranos", tipo: "cargaGranos", flatten: flattenCarga },
   { store: "movimientosInsumos", tipo: "movimientoInsumo", flatten: flattenMovimiento },
   { store: "aplicacionesFitosanitarios", tipo: "aplicacionFitosanitaria", flatten: flattenAplicacion },
   { store: "avanceSiembra", tipo: "avanceSiembra", flatten: flattenAvance },
   { store: "cierresSiembra", tipo: "cierreSiembra", flatten: flattenCierre },
+  { store: "ajustesSiloBolsa", tipo: "ajusteSiloBolsa", flatten: flattenAjusteSiloBolsa },
 ];
 
 let syncing = false;
@@ -403,12 +408,29 @@ async function unflattenCierre(fila) {
   };
 }
 
+async function unflattenAjusteSiloBolsa(fila) {
+  return {
+    id: fila.id,
+    fecha: fila.fecha,
+    siloBolsaNombre: String(fila.siloBolsaNombre || "").trim(),
+    cultivo: fila.cultivo || "",
+    kgTotalInicial: parseFloat(fila.kgTotalInicial) || 0,
+    kgTotalRetirado: parseFloat(fila.kgTotalRetirado) || 0,
+    diferenciaKg: parseFloat(fila.diferenciaKg) || 0,
+    tipoDiferencia: fila.tipoDiferencia || "exacto",
+    observaciones: fila.observaciones || "",
+    sincronizado: true,
+    fechaCreacionRegistro: fila.fechaCreacionRegistro || new Date().toISOString(),
+  };
+}
+
 const TIPOS_PULL = [
   { tipo: "cargaGranos", store: "cargasGranos", unflatten: unflattenCarga },
   { tipo: "movimientoInsumo", store: "movimientosInsumos", unflatten: unflattenMovimiento },
   { tipo: "aplicacionFitosanitaria", store: "aplicacionesFitosanitarios", unflatten: unflattenAplicacion },
   { tipo: "avanceSiembra", store: "avanceSiembra", unflatten: unflattenAvance },
   { tipo: "cierreSiembra", store: "cierresSiembra", unflatten: unflattenCierre },
+  { tipo: "ajusteSiloBolsa", store: "ajustesSiloBolsa", unflatten: unflattenAjusteSiloBolsa },
 ];
 
 async function pullAll() {
