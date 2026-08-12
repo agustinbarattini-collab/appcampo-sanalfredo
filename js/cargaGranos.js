@@ -89,11 +89,12 @@ const cargaGranosView = {
   state: { campaniaFiltro: null },
 
   async render(container) {
-    const [lotes, silos, corredores, campanias, stockGranos] = await Promise.all([
+    const [lotes, silos, corredores, campanias, planesSiembra, stockGranos] = await Promise.all([
       dbGetAll("lotes"),
       dbGetAll("silosBolsa"),
       dbGetAll("corredores"),
       dbGetAll("campanias"),
+      dbGetAll("planSiembra"),
       getStockGranosPorCultivo(),
     ]);
 
@@ -256,6 +257,7 @@ const cargaGranosView = {
     const bloqueFinalizarOrigen1 = container.querySelector("#bloqueFinalizarOrigen1");
     const fFinalizarOrigen1 = container.querySelector("#fFinalizarOrigen1");
     const fCultivo = container.querySelector("#fCultivo");
+    const fCampaniaSel = container.querySelector("#fCampania");
 
     async function actualizarOrigen1() {
       await poblarOrigenSelect(origenIdSel, origenTipoSel.value);
@@ -269,8 +271,17 @@ const cargaGranosView = {
       if (!id) return;
       let cultivo = "";
       if (tipo === "lote") {
-        const lote = await dbGet("lotes", id);
-        cultivo = lote?.cultivo || "";
+        // El cultivo de un lote depende de la campaña (puede cambiar de una a otra).
+        // Se busca primero en el Plan de Siembra de la campaña elegida; si no hay
+        // un plan cargado o hay más de uno activo (doble cultivo, ej. Trigo +
+        // Soja 2da), no se adivina y se completa a mano.
+        const planesDelLote = planesSiembra.filter((p) => p.loteId === id && p.campaniaId === fCampaniaSel.value);
+        if (planesDelLote.length === 1) {
+          cultivo = planesDelLote[0].cultivo;
+        } else if (planesDelLote.length === 0) {
+          const lote = await dbGet("lotes", id);
+          cultivo = lote?.cultivo || "";
+        }
       } else {
         const silosStock = await getSilosBolsaConStock();
         cultivo = silosStock.find((s) => s.id === id)?.cultivo || "";
@@ -278,6 +289,7 @@ const cargaGranosView = {
       if (cultivo) fCultivo.value = cultivo;
     }
     origenIdSel.addEventListener("change", () => autocompletarCultivo(origenTipoSel.value, origenIdSel.value));
+    fCampaniaSel.addEventListener("change", () => autocompletarCultivo(origenTipoSel.value, origenIdSel.value));
 
     const bloqueOrigen2 = container.querySelector("#bloqueOrigen2");
     const btnToggleOrigen2 = container.querySelector("#btnToggleOrigen2");
