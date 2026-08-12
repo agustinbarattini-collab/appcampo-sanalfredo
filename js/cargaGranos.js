@@ -52,12 +52,12 @@ function renderStockGranosCard(container, stock) {
 // Marca el silo bolsa como finalizado (stock queda en 0, desaparece de la lista
 // de orígenes) y registra la diferencia entre lo que la app calculaba como
 // residual y lo que realmente se retiró en este último camión. diferenciaKg
-// positiva = faltante (se sacó menos de lo que decía la app, mermó en el camino);
-// negativa = sobrante (se sacó más de lo esperado).
+// positiva = sobrante (se sacó más de lo que decía la app calculada);
+// negativa = faltante (se sacó menos de lo esperado, mermó en el camino).
 async function finalizarSiloBolsa(siloId, kgResidualAntes, kgEsteViaje, fechaCarga) {
   const silo = await dbGet("silosBolsa", siloId);
   if (!silo) return null;
-  const diferenciaKg = Math.round((kgResidualAntes - kgEsteViaje) * 100) / 100;
+  const diferenciaKg = Math.round((kgEsteViaje - kgResidualAntes) * 100) / 100;
   await dbPut("silosBolsa", { ...silo, finalizado: true, fechaFinalizacion: new Date().toISOString() });
   const ajuste = {
     id: uid(),
@@ -65,9 +65,9 @@ async function finalizarSiloBolsa(siloId, kgResidualAntes, kgEsteViaje, fechaCar
     siloBolsaNombre: silo.nombre,
     cultivo: silo.cultivo || "",
     kgTotalInicial: silo.kgTotalInicial || 0,
-    kgTotalRetirado: Math.round(((silo.kgTotalInicial || 0) - diferenciaKg) * 100) / 100,
+    kgTotalRetirado: Math.round(((silo.kgTotalInicial || 0) + diferenciaKg) * 100) / 100,
     diferenciaKg,
-    tipoDiferencia: diferenciaKg > 0 ? "faltante" : diferenciaKg < 0 ? "sobrante" : "exacto",
+    tipoDiferencia: diferenciaKg > 0 ? "sobrante" : diferenciaKg < 0 ? "faltante" : "exacto",
     observaciones: "",
     sincronizado: false,
     fechaCreacionRegistro: new Date().toISOString(),
