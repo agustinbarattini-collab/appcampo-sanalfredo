@@ -5,11 +5,13 @@ import {
   proveedoresView,
   contratistasView,
   insumosView,
+  campaniasView,
 } from "./maestros.js";
 import { APP_CONFIG } from "./config.js";
 import { importarMaestros } from "./sync.js";
 
 const subViews = {
+  campanias: { view: campaniasView, label: "Campañas" },
   lotes: { view: lotesView, label: "Lotes" },
   silos: { view: silosBolsaView, label: "Silos Bolsa" },
   corredores: { view: corredoresView, label: "Corredores" },

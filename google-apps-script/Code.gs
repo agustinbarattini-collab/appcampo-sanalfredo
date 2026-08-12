@@ -18,6 +18,8 @@ const SHEETS = {
       // en planillas existentes): segundo origen opcional, para cuando el camión se
       // carga de 2 bolsas o 2 lotes en el mismo viaje.
       "origen2Tipo", "origen2Nombre", "kgOrigen2",
+      // Va al final por el mismo motivo: no correr de lugar los datos ya cargados.
+      "campaniaNombre",
     ],
   },
   movimientoInsumo: {
@@ -40,6 +42,7 @@ const SHEETS = {
       "comentarios", "fechaCreacionRegistro", "fechaSincronizacion",
       // Va al final para no correr de lugar los datos ya cargados en planillas existentes.
       "producto6Nombre", "producto6Cantidad", "producto6Unidad",
+      "ordenTrabajoNombre",
     ],
   },
   avanceSiembra: {
@@ -47,6 +50,7 @@ const SHEETS = {
     headers: [
       "id", "fecha", "loteNombre", "cultivo", "hasSembradas", "comentarios", "marcaCierre",
       "fechaCreacionRegistro", "fechaSincronizacion",
+      "campaniaNombre",
     ],
   },
   cierreSiembra: {
@@ -55,6 +59,7 @@ const SHEETS = {
       "id", "fecha", "loteNombre", "cultivo", "semillaKg", "semillaVariedad", "semillaBolsas",
       "semillaHibrido", "fertilizanteKg", "fertilizanteTipo", "comentarios",
       "fechaCreacionRegistro", "fechaSincronizacion",
+      "campaniaNombre",
     ],
   },
   ajusteSiloBolsa: {
@@ -64,19 +69,33 @@ const SHEETS = {
       "diferenciaKg", "tipoDiferencia", "observaciones", "fechaCreacionRegistro", "fechaSincronizacion",
     ],
   },
+  ordenTrabajo: {
+    name: "Órdenes de Trabajo",
+    headers: [
+      "id", "nombre", "contratistaNombre", "lotesNombres", "fechaAsignacion", "fechaLimite",
+      "producto1Nombre", "producto1Cantidad", "producto1Unidad",
+      "producto2Nombre", "producto2Cantidad", "producto2Unidad",
+      "producto3Nombre", "producto3Cantidad", "producto3Unidad",
+      "producto4Nombre", "producto4Cantidad", "producto4Unidad",
+      "producto5Nombre", "producto5Cantidad", "producto5Unidad",
+      "producto6Nombre", "producto6Cantidad", "producto6Unidad",
+      "observaciones", "fechaCreacion", "fechaCreacionRegistro", "fechaSincronizacion",
+    ],
+  },
 };
 
 // Pestañas de maestros: las edita la persona directamente en la Sheet.
 // La app las lee (POST con accion:"leerMaestros") para importar Lotes, Insumos, etc.
 // sin tipearlos a mano.
 const MAESTROS_SHEETS = {
-  lotes: { name: "Maestros - Lotes", headers: ["nombre"] },
+  lotes: { name: "Maestros - Lotes", headers: ["nombre", "cultivo"] },
   silosBolsa: { name: "Maestros - Silos Bolsa", headers: ["nombre", "cultivo", "kgTotalInicial"] },
   corredores: { name: "Maestros - Corredores", headers: ["nombre"] },
   insumos: { name: "Maestros - Insumos", headers: ["nombre", "unidad"] },
   proveedores: { name: "Maestros - Proveedores", headers: ["nombre"] },
   contratistas: { name: "Maestros - Contratistas", headers: ["nombre"] },
-  planSiembra: { name: "Maestros - Plan Siembra", headers: ["loteNombre", "cultivo", "superficieTeorica"] },
+  campanias: { name: "Maestros - Campañas", headers: ["nombre", "activa"] },
+  planSiembra: { name: "Maestros - Plan Siembra", headers: ["loteNombre", "cultivo", "superficieTeorica", "campaniaNombre"] },
 };
 
 /**

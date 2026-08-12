@@ -175,4 +175,67 @@ const silosBolsaView = {
   },
 };
 
-export { lotesView, corredoresView, silosBolsaView, proveedoresView, contratistasView, insumosView };
+const campaniasView = {
+  async render(container) {
+    const campanias = (await dbGetAll("campanias")).sort((a, b) => b.nombre.localeCompare(a.nombre));
+    container.innerHTML = `
+      <h2>Campañas</h2>
+      <div class="card">
+        <form id="formNuevo">
+          <div class="field">
+            <label>Nombre de la campaña (ej: 2025/26)</label>
+            <input type="text" id="fNombre" required />
+          </div>
+          <button type="submit">Agregar</button>
+        </form>
+      </div>
+      <div class="card" id="listaContainer">
+        ${campanias.length === 0 ? '<div class="empty-state">Todavía no cargaste ninguna. La campaña activa es la que usan por defecto Carga de Granos y Siembra.</div>' : ""}
+      </div>
+    `;
+
+    const listaContainer = container.querySelector("#listaContainer");
+    for (const c of campanias) {
+      const row = document.createElement("div");
+      row.className = "list-item";
+      row.innerHTML = `
+        <div>
+          <div><strong>${c.nombre}</strong> ${c.activa ? '<span class="pill sincronizado">Activa</span>' : ""}</div>
+        </div>
+        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
+          ${c.activa ? "" : '<button class="secondary" data-accion="activar" data-id="' + c.id + '">Marcar activa</button>'}
+          <button class="secondary" data-accion="borrar" data-id="${c.id}">Borrar</button>
+        </div>
+      `;
+      row.querySelector('[data-accion="borrar"]').addEventListener("click", async () => {
+        if (confirm(`¿Borrar la campaña "${c.nombre}"? Las cargas y planes ya registrados bajo esta campaña no se borran, pero quedan sin campaña asociada visible acá.`)) {
+          await dbDelete("campanias", c.id);
+          this.render(container);
+        }
+      });
+      const btnActivar = row.querySelector('[data-accion="activar"]');
+      if (btnActivar) {
+        btnActivar.addEventListener("click", async () => {
+          // Solo puede haber una campaña activa a la vez: desactiva todas las demás.
+          for (const otra of campanias) {
+            if (otra.activa) await dbPut("campanias", { ...otra, activa: false });
+          }
+          await dbPut("campanias", { ...c, activa: true });
+          this.render(container);
+        });
+      }
+      listaContainer.appendChild(row);
+    }
+
+    container.querySelector("#formNuevo").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const nombre = container.querySelector("#fNombre").value.trim();
+      if (!nombre) return;
+      // La primera campaña que se crea arranca activa por defecto.
+      await dbPut("campanias", { id: uid(), nombre, activa: campanias.length === 0 });
+      this.render(container);
+    });
+  },
+};
+
+export { lotesView, corredoresView, silosBolsaView, proveedoresView, contratistasView, insumosView, campaniasView };

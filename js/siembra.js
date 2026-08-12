@@ -128,13 +128,14 @@ function renderResumenCard(container, planes, cultivoExpandido, onToggleCultivo)
   });
 }
 
-function renderFormPlan(container, formArea, { lotesMaestro, planesConEstado }, onSaved) {
+function renderFormPlan(container, formArea, { lotesMaestro, planesConEstado, campania }, onSaved) {
   if (lotesMaestro.length === 0) {
     formArea.innerHTML = `<div class="empty-state">Todavía no cargaste ningún <strong>Lote</strong>.<br/>Andá a Maestros → Lotes para cargarlo.</div>`;
     return;
   }
 
   formArea.innerHTML = `
+    <div class="muted" style="margin-bottom:8px;">Se agrega al plan de la campaña <strong>${campania.nombre}</strong>.</div>
     <form id="formPlan">
       <div class="field">
         <label>Lote</label>
@@ -221,6 +222,8 @@ function renderFormPlan(container, formArea, { lotesMaestro, planesConEstado }, 
       loteId,
       loteNombre: lote ? lote.nombre : "",
       cultivo,
+      campaniaId: campania.id,
+      campaniaNombre: campania.nombre,
       superficieTeorica: parseFloat(container.querySelector("#fSuperficie").value) || 0,
     });
     onSaved();
@@ -270,6 +273,8 @@ function renderFormAvance(container, formArea, { planesAbiertos }, onSaved) {
       loteId: plan ? plan.loteId : "",
       loteNombre: plan ? plan.loteNombre : "",
       cultivo: plan ? plan.cultivo : "",
+      campaniaId: plan ? plan.campaniaId : "",
+      campaniaNombre: plan ? plan.campaniaNombre : "",
       hasSembradas: parseFloat(container.querySelector("#fHas").value) || 0,
       comentarios: container.querySelector("#fComentarios").value.trim(),
       marcaCierre: cerrar,
@@ -368,6 +373,8 @@ function renderFormCierre(container, formArea, { pendientes }, onSaved) {
         loteId: plan.loteId,
         loteNombre: plan.loteNombre,
         cultivo: plan.cultivo,
+        campaniaId: plan.campaniaId,
+        campaniaNombre: plan.campaniaNombre,
         fecha: block.querySelector(".fFechaCierre").value,
         semillaKg: semillaKg || null,
         semillaVariedad: getVal(".fSemillaVariedad") || null,
@@ -389,13 +396,48 @@ function renderFormCierre(container, formArea, { pendientes }, onSaved) {
 }
 
 const siembraView = {
-  state: { tipo: "avance", cultivoExpandido: null },
+  state: { tipo: "avance", cultivoExpandido: null, campaniaId: null },
 
   async render(container) {
-    const [lotesMaestro, planesConEstado] = await Promise.all([dbGetAll("lotes"), getAvancePlanes()]);
+    const [lotesMaestro, planesTodas, campanias] = await Promise.all([
+      dbGetAll("lotes"),
+      getAvancePlanes(),
+      dbGetAll("campanias"),
+    ]);
+
+    if (campanias.length === 0) {
+      container.innerHTML = `
+        <h2>Aplicación de Siembra</h2>
+        <div class="card empty-state">
+          Todavía no cargaste ninguna <strong>Campaña</strong> (ej: 2025/26).<br/>
+          Andá a Maestros → Campañas para cargarla antes de armar el plan de siembra.
+        </div>`;
+      return;
+    }
+
+    const campaniaActiva = campanias.find((c) => c.activa) || campanias[0];
+    if (!this.state.campaniaId || !campanias.some((c) => c.id === this.state.campaniaId)) {
+      this.state.campaniaId = campaniaActiva.id;
+    }
+    const campaniaSeleccionada = campanias.find((c) => c.id === this.state.campaniaId) || campaniaActiva;
+    // Los planes viejos, de antes de que existiera Campaña, no tienen
+    // campaniaId — se los trata como parte de la campaña activa.
+    const planesConEstado = planesTodas.filter(
+      (p) => (p.campaniaId || campaniaActiva.id) === campaniaSeleccionada.id
+    );
 
     container.innerHTML = `
       <h2>Aplicación de Siembra</h2>
+      <div class="card">
+        <label style="font-size:0.8rem;">Trabajando en la campaña</label>
+        <select id="fCampaniaSiembra">
+          ${campanias
+            .slice()
+            .sort((a, b) => b.nombre.localeCompare(a.nombre))
+            .map((c) => `<option value="${c.id}" ${c.id === campaniaSeleccionada.id ? "selected" : ""}>${c.nombre}${c.activa ? " (activa)" : ""}</option>`)
+            .join("")}
+        </select>
+      </div>
       <div class="card" id="resumenCard"></div>
       <div class="card">
         <div class="tipo-toggle" id="tipoToggle">
@@ -407,6 +449,11 @@ const siembraView = {
       </div>
       <div class="card" id="listaSiembra"></div>
     `;
+
+    container.querySelector("#fCampaniaSiembra").addEventListener("change", (e) => {
+      this.state.campaniaId = e.target.value;
+      this.render(container);
+    });
 
     const refrescarResumen = () => {
       renderResumenCard(container, planesConEstado, this.state.cultivoExpandido, (cultivo) => {
@@ -430,7 +477,7 @@ const siembraView = {
     const planesPendientes = planesConEstado.filter((l) => l.pendienteCierre);
 
     if (this.state.tipo === "plan") {
-      renderFormPlan(container, formArea, { lotesMaestro, planesConEstado }, () => this.render(container));
+      renderFormPlan(container, formArea, { lotesMaestro, planesConEstado, campania: campaniaSeleccionada }, () => this.render(container));
     } else if (this.state.tipo === "avance") {
       renderFormAvance(container, formArea, { planesAbiertos }, (cerrar) => {
         if (cerrar) this.state.tipo = "cierre";
@@ -440,13 +487,15 @@ const siembraView = {
       renderFormCierre(container, formArea, { pendientes: planesPendientes }, () => this.render(container));
     }
 
-    await renderListado(container);
+    await renderListado(container, campaniaSeleccionada.id, campaniaActiva.id);
   },
 };
 
-async function renderListado(container) {
+async function renderListado(container, campaniaId, campaniaActivaId) {
   const lista = container.querySelector("#listaSiembra");
-  const [avances, cierres] = await Promise.all([dbGetAll(STORE_AVANCE), dbGetAll(STORE_CIERRE)]);
+  const [avancesTodos, cierresTodos] = await Promise.all([dbGetAll(STORE_AVANCE), dbGetAll(STORE_CIERRE)]);
+  const avances = avancesTodos.filter((a) => (a.campaniaId || campaniaActivaId) === campaniaId);
+  const cierres = cierresTodos.filter((c) => (c.campaniaId || campaniaActivaId) === campaniaId);
   const items = [
     ...avances.map((a) => ({ ...a, _tipo: "avance" })),
     ...cierres.map((c) => ({ ...c, _tipo: "cierre" })),

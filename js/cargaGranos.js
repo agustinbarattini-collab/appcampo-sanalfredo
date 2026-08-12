@@ -86,11 +86,14 @@ function mensajeAjuste(ajuste) {
 }
 
 const cargaGranosView = {
+  state: { campaniaFiltro: null },
+
   async render(container) {
-    const [lotes, silos, corredores, stockGranos] = await Promise.all([
+    const [lotes, silos, corredores, campanias, stockGranos] = await Promise.all([
       dbGetAll("lotes"),
       dbGetAll("silosBolsa"),
       dbGetAll("corredores"),
+      dbGetAll("campanias"),
       getStockGranosPorCultivo(),
     ]);
 
@@ -112,12 +115,37 @@ const cargaGranosView = {
         </div>`;
       return;
     }
+    if (campanias.length === 0) {
+      container.innerHTML = `
+        <h2>Carga de Granos de Campo</h2>
+        <div class="card empty-state">
+          Todavía no cargaste ninguna <strong>Campaña</strong> (ej: 2025/26).<br/>
+          Andá a Maestros → Campañas para cargarla antes de registrar una carga.
+        </div>`;
+      return;
+    }
+
+    const campaniaActiva = campanias.find((c) => c.activa) || null;
+    if (this.state.campaniaFiltro === null) {
+      this.state.campaniaFiltro = campaniaActiva ? campaniaActiva.id : "";
+    }
 
     container.innerHTML = `
       <h2>Carga de Granos de Campo</h2>
       ${silos.length > 0 ? '<div class="card" id="stockGranosCard"></div>' : ""}
       <div class="card">
         <form id="formCarga">
+          <div class="field">
+            <label>Campaña</label>
+            <select id="fCampania" required>
+              ${campanias
+                .slice()
+                .sort((a, b) => b.nombre.localeCompare(a.nombre))
+                .map((c) => `<option value="${c.id}" ${campaniaActiva && c.id === campaniaActiva.id ? "selected" : ""}>${c.nombre}${c.activa ? " (activa)" : ""}</option>`)
+                .join("")}
+            </select>
+          </div>
+
           <div class="field">
             <label>Fecha y hora</label>
             <input type="datetime-local" id="fFecha" value="${nowLocalDatetime()}" required />
@@ -381,6 +409,9 @@ const cargaGranosView = {
       const corredorId = container.querySelector("#fCorredorId").value;
       const corredor = await dbGet("corredores", corredorId);
 
+      const campaniaId = container.querySelector("#fCampania").value;
+      const campania = campanias.find((c) => c.id === campaniaId);
+
       let fotoBlob = null;
       const fotoInput = container.querySelector("#fFoto");
       if (fotoInput.files && fotoInput.files[0]) {
@@ -392,6 +423,8 @@ const cargaGranosView = {
       const registro = {
         id: uid(),
         fecha,
+        campaniaId,
+        campaniaNombre: campania ? campania.nombre : "",
         origenTipo: origenTipoSel.value,
         origenId,
         origenNombre,
@@ -437,18 +470,50 @@ const cargaGranosView = {
       this.render(container);
     });
 
-    await renderListadoCargas(container);
+    await renderListadoCargas(container, campanias, this.state, campaniaActiva);
   },
 };
 
-async function renderListadoCargas(container) {
+async function renderListadoCargas(container, campanias, state, campaniaActiva) {
   const lista = container.querySelector("#listaCargas");
-  const cargas = (await dbGetAll(STORE)).sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""));
-  if (cargas.length === 0) {
-    lista.innerHTML = '<div class="empty-state">Todavía no registraste cargas.</div>';
+  const todasLasCargas = (await dbGetAll(STORE)).sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""));
+  // Las cargas viejas, de antes de que existiera el concepto de Campaña, no
+  // tienen campaniaId — se las trata como pertenecientes a la campaña activa,
+  // así no "desaparecen" del filtro por defecto en ningún dispositivo.
+  const campaniaDe = (c) => c.campaniaId || (campaniaActiva ? campaniaActiva.id : "");
+  const cargas = state.campaniaFiltro
+    ? todasLasCargas.filter((c) => campaniaDe(c) === state.campaniaFiltro)
+    : todasLasCargas;
+
+  const filtroHtml = `
+    <div class="field" style="margin-bottom:10px;">
+      <label style="font-size:0.8rem;">Ver campaña</label>
+      <select id="fFiltroCampania" style="padding:6px 8px; font-size:0.9rem;">
+        <option value="">Todas</option>
+        ${campanias
+          .slice()
+          .sort((a, b) => b.nombre.localeCompare(a.nombre))
+          .map((c) => `<option value="${c.id}" ${state.campaniaFiltro === c.id ? "selected" : ""}>${c.nombre}${c.activa ? " (activa)" : ""}</option>`)
+          .join("")}
+      </select>
+    </div>
+  `;
+
+  if (todasLasCargas.length === 0) {
+    lista.innerHTML = `<h2 style="margin-top:0;">Últimas cargas</h2><div class="empty-state">Todavía no registraste cargas.</div>`;
     return;
   }
-  lista.innerHTML = `<h2 style="margin-top:0;">Últimas cargas</h2>`;
+
+  lista.innerHTML = `<h2 style="margin-top:0;">Últimas cargas</h2>${filtroHtml}`;
+  lista.querySelector("#fFiltroCampania").addEventListener("change", (e) => {
+    state.campaniaFiltro = e.target.value;
+    renderListadoCargas(container, campanias, state, campaniaActiva);
+  });
+
+  if (cargas.length === 0) {
+    lista.innerHTML += '<div class="empty-state">No hay cargas registradas en esta campaña.</div>';
+    return;
+  }
   for (const c of cargas) {
     const row = document.createElement("div");
     row.className = "list-item";
@@ -471,7 +536,7 @@ async function renderListadoCargas(container) {
     row.querySelector("button").addEventListener("click", async () => {
       if (confirm("¿Borrar este registro?")) {
         await dbDelete(STORE, c.id);
-        renderListadoCargas(container);
+        renderListadoCargas(container, campanias, state, campaniaActiva);
       }
     });
     lista.appendChild(row);

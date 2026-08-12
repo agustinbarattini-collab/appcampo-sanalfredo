@@ -54,13 +54,23 @@ function actualizarPendienteFila(filaEl, contratistaId, cuenta) {
   }
 }
 
+function actualizarOrdenesDisponibles(select, ordenes, contratistaId, loteId) {
+  const disponibles = ordenes.filter(
+    (o) => o.contratistaId === contratistaId && (o.lotes || []).some((l) => l.loteId === loteId)
+  );
+  select.innerHTML =
+    '<option value="">Sin vincular a una orden</option>' +
+    disponibles.map((o) => `<option value="${o.id}">${o.nombre}${o.fechaLimite ? " (plazo " + o.fechaLimite + ")" : ""}</option>`).join("");
+}
+
 const aplicacionesFitosanitariosView = {
   async render(container) {
-    const [contratistas, lotes, insumos, cuenta] = await Promise.all([
+    const [contratistas, lotes, insumos, cuenta, ordenes] = await Promise.all([
       dbGetAll("contratistas"),
       dbGetAll("lotes"),
       dbGetAll("insumos"),
       getCuentaContratistas(),
+      dbGetAll("ordenesTrabajo"),
     ]);
 
     if (contratistas.length === 0 || lotes.length === 0 || insumos.length === 0) {
@@ -93,6 +103,10 @@ const aplicacionesFitosanitariosView = {
           <div class="field">
             <label>Lote</label>
             <select id="fLote" required><option value="">Seleccionar...</option>${opts(lotes)}</select>
+          </div>
+          <div class="field">
+            <label>Orden de Trabajo (opcional)</label>
+            <select id="fOrden"><option value="">Elegí primero contratista y lote...</option></select>
           </div>
           <div class="field">
             <label>Has aplicadas</label>
@@ -128,6 +142,8 @@ const aplicacionesFitosanitariosView = {
     renderCuentaCard(container, cuenta);
 
     const fContratista = container.querySelector("#fContratista");
+    const fLote = container.querySelector("#fLote");
+    const fOrden = container.querySelector("#fOrden");
     const filas = Array.from(container.querySelectorAll(".fila-aplicacion"));
 
     filas.forEach((fila) => {
@@ -135,9 +151,13 @@ const aplicacionesFitosanitariosView = {
         actualizarPendienteFila(fila, fContratista.value, cuenta);
       });
     });
+    const actualizarOrdenes = () => actualizarOrdenesDisponibles(fOrden, ordenes, fContratista.value, fLote.value);
     fContratista.addEventListener("change", () => {
       filas.forEach((fila) => actualizarPendienteFila(fila, fContratista.value, cuenta));
+      actualizarOrdenes();
     });
+    fLote.addEventListener("change", actualizarOrdenes);
+    actualizarOrdenes();
 
     container.querySelector("#formAplicacion").addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -147,6 +167,8 @@ const aplicacionesFitosanitariosView = {
 
       const contratista = contratistas.find((c) => c.id === contratistaId);
       const lote = lotes.find((l) => l.id === loteId);
+      const ordenId = fOrden.value;
+      const orden = ordenId ? ordenes.find((o) => o.id === ordenId) : null;
 
       const productos = [];
       const avisos = [];
@@ -198,6 +220,8 @@ const aplicacionesFitosanitariosView = {
         contratistaNombre: contratista ? contratista.nombre : "",
         loteId,
         loteNombre: lote ? lote.nombre : "",
+        ordenTrabajoId: ordenId || null,
+        ordenTrabajoNombre: orden ? orden.nombre : "",
         hectareas: parseFloat(container.querySelector("#fHas").value) || 0,
         productos,
         comentarios: container.querySelector("#fComentarios").value.trim(),
@@ -228,7 +252,7 @@ async function renderListadoAplicaciones(container) {
     row.innerHTML = `
       <div>
         <div><strong>${a.loteNombre}</strong> — ${productosTxt} (${a.hectareas} ha)</div>
-        <div class="muted">${a.fecha?.replace("T", " ")} · ${a.contratistaNombre}${a.comentarios ? " · " + a.comentarios : ""}</div>
+        <div class="muted">${a.fecha?.replace("T", " ")} · ${a.contratistaNombre}${a.ordenTrabajoNombre ? " · orden " + a.ordenTrabajoNombre : ""}${a.comentarios ? " · " + a.comentarios : ""}</div>
       </div>
       <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
         <span class="pill ${a.sincronizado ? "sincronizado" : "pendiente"}">${a.sincronizado ? "Sincronizado" : "Pendiente"}</span>

@@ -112,6 +112,64 @@ async function getAvancePlanes() {
   });
 }
 
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+// Órdenes de trabajo "completas" (creadas con lotes + productos planificados,
+// a diferencia de las livianas que se autocrean al tipear un nombre nuevo en
+// Insumos → Salida). Para cada una calcula: cobertura por lote (según haya o
+// no una Aplicación de Fitosanitarios vinculada a esa orden+lote), estado
+// (pendiente/atrasada/completada) y la diferencia planificado vs. aplicado
+// por producto (sumando TODAS las aplicaciones vinculadas, en cualquier lote).
+async function getOrdenesConEstado() {
+  const [ordenes, aplicaciones] = await Promise.all([
+    dbGetAll("ordenesTrabajo"),
+    dbGetAll("aplicacionesFitosanitarios"),
+  ]);
+  const hoy = today();
+  return ordenes
+    .filter((o) => (o.lotes || []).length > 0)
+    .map((o) => {
+      const aplicacionesOrden = aplicaciones.filter((a) => a.ordenTrabajoId === o.id);
+      const lotesAplicadosIds = new Set(aplicacionesOrden.map((a) => a.loteId));
+      const lotes = (o.lotes || []).map((l) => ({ ...l, aplicado: lotesAplicadosIds.has(l.loteId) }));
+      const lotesFaltantes = lotes.filter((l) => !l.aplicado);
+      const completada = lotes.length > 0 && lotesFaltantes.length === 0;
+      const atrasada = !completada && !!o.fechaLimite && o.fechaLimite < hoy;
+      const diasAtraso = atrasada ? Math.round((new Date(hoy) - new Date(o.fechaLimite)) / 86400000) : 0;
+
+      const aplicadoPorProducto = {};
+      for (const a of aplicacionesOrden) {
+        for (const p of a.productos || []) {
+          aplicadoPorProducto[p.productoId] = (aplicadoPorProducto[p.productoId] || 0) + p.cantidad;
+        }
+      }
+      const comparacionProductos = (o.productosPlanificados || []).map((p) => {
+        const aplicado = aplicadoPorProducto[p.productoId] || 0;
+        return {
+          productoNombre: p.productoNombre,
+          unidad: p.unidad,
+          planificado: p.cantidad,
+          aplicado,
+          diferencia: Math.round((aplicado - p.cantidad) * 100) / 100,
+        };
+      });
+
+      return {
+        ...o,
+        lotes,
+        lotesFaltantes,
+        lotesAplicadosCount: lotes.length - lotesFaltantes.length,
+        totalLotes: lotes.length,
+        estado: completada ? "completada" : atrasada ? "atrasada" : "pendiente",
+        diasAtraso,
+        comparacionProductos,
+      };
+    })
+    .sort((a, b) => (a.fechaLimite || "").localeCompare(b.fechaLimite || ""));
+}
+
 export {
   getSilosBolsaConStock,
   getStockGranosPorCultivo,
@@ -119,4 +177,5 @@ export {
   getSaldoOrden,
   getCuentaContratistas,
   getAvancePlanes,
+  getOrdenesConEstado,
 };

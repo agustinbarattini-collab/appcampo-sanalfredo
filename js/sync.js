@@ -37,6 +37,19 @@ function flattenAjusteSiloBolsa(r) {
   return { ...r };
 }
 
+function flattenOrdenTrabajo(r) {
+  const out = { ...r };
+  out.lotesNombres = (r.lotes || []).map((l) => l.loteNombre).join(", ");
+  (r.productosPlanificados || []).forEach((p, i) => {
+    out[`producto${i + 1}Nombre`] = p.productoNombre;
+    out[`producto${i + 1}Cantidad`] = p.cantidad;
+    out[`producto${i + 1}Unidad`] = p.unidad;
+  });
+  out.lotes = undefined;
+  out.productosPlanificados = undefined;
+  return out;
+}
+
 const TIPOS = [
   { store: "cargasGranos", tipo: "cargaGranos", flatten: flattenCarga },
   { store: "movimientosInsumos", tipo: "movimientoInsumo", flatten: flattenMovimiento },
@@ -44,6 +57,7 @@ const TIPOS = [
   { store: "avanceSiembra", tipo: "avanceSiembra", flatten: flattenAvance },
   { store: "cierresSiembra", tipo: "cierreSiembra", flatten: flattenCierre },
   { store: "ajustesSiloBolsa", tipo: "ajusteSiloBolsa", flatten: flattenAjusteSiloBolsa },
+  { store: "ordenesTrabajo", tipo: "ordenTrabajo", flatten: flattenOrdenTrabajo },
 ];
 
 let syncing = false;
@@ -104,12 +118,13 @@ async function syncAll(onProgress) {
 // ---------------------------------------------------------------------------
 
 const MAESTROS_CAMPOS = {
-  lotes: ["nombre"],
+  lotes: ["nombre", "cultivo"],
   corredores: ["nombre"],
   proveedores: ["nombre"],
   contratistas: ["nombre"],
   insumos: ["nombre", "unidad"],
   silosBolsa: ["nombre", "cultivo", "kgTotalInicial"],
+  campanias: ["nombre", "activa"],
 };
 
 const MAESTROS_ETIQUETAS = {
@@ -119,6 +134,7 @@ const MAESTROS_ETIQUETAS = {
   contratistas: "Contratistas",
   insumos: "Insumos",
   silosBolsa: "Silos Bolsa",
+  campanias: "Campañas",
   planSiembra: "Plan de Siembra",
 };
 
@@ -151,6 +167,7 @@ async function importarMaestros() {
         if (campo === "nombre") continue;
         let valor = fila[campo];
         if (campo === "kgTotalInicial") valor = parseFloat(valor) || 0;
+        if (campo === "activa") valor = valor === true || valor === "TRUE" || valor === "true";
         record[campo] = valor;
       }
       await dbPut(store, record);
@@ -160,7 +177,7 @@ async function importarMaestros() {
     resumen[MAESTROS_ETIQUETAS[store]] = { nuevos, actualizados };
   }
 
-  // Plan de Siembra: clave compuesta (loteNombre + cultivo), no un "nombre" único.
+  // Plan de Siembra: clave compuesta (loteNombre + cultivo + campañaNombre), no un "nombre" único.
   {
     const filas = data.maestros.planSiembra || [];
     const existentes = await dbGetAll("planSiembra");
@@ -169,14 +186,16 @@ async function importarMaestros() {
     for (const fila of filas) {
       const loteNombre = String(fila.loteNombre || "").trim();
       const cultivo = String(fila.cultivo || "").trim();
+      const campaniaNombre = String(fila.campaniaNombre || "").trim();
       if (!loteNombre || !cultivo) continue;
       const loteId = await resolverIdPorNombre("lotes", loteNombre);
+      const campaniaId = campaniaNombre ? await resolverIdPorNombre("campanias", campaniaNombre, { activa: false }) : null;
       const existente = existentes.find(
-        (p) => p.loteId === loteId && p.cultivo.trim().toLowerCase() === cultivo.toLowerCase()
+        (p) => p.loteId === loteId && p.cultivo.trim().toLowerCase() === cultivo.toLowerCase() && (p.campaniaId || null) === campaniaId
       );
       const record = existente
         ? { ...existente }
-        : { id: uid(), loteId, loteNombre, cultivo };
+        : { id: uid(), loteId, loteNombre, cultivo, campaniaId, campaniaNombre };
       record.superficieTeorica = parseFloat(fila.superficieTeorica) || 0;
       await dbPut("planSiembra", record);
       if (existente) actualizados++;
@@ -208,17 +227,19 @@ async function resolverIdPorNombre(store, nombre, camposNuevos = {}) {
   return nuevo.id;
 }
 
-async function resolverPlan(loteNombre, cultivo) {
+async function resolverPlan(loteNombre, cultivo, campaniaNombre) {
   const lote = String(loteNombre || "").trim();
   const cult = String(cultivo || "").trim();
+  const camp = String(campaniaNombre || "").trim();
   if (!lote) return null;
   const loteId = await resolverIdPorNombre("lotes", lote);
+  const campaniaId = camp ? await resolverIdPorNombre("campanias", camp, { activa: false }) : null;
   const planes = await dbGetAll("planSiembra");
   let plan = planes.find(
-    (p) => p.loteId === loteId && p.cultivo.trim().toLowerCase() === cult.toLowerCase()
+    (p) => p.loteId === loteId && p.cultivo.trim().toLowerCase() === cult.toLowerCase() && (p.campaniaId || null) === campaniaId
   );
   if (!plan) {
-    plan = { id: uid(), loteId, loteNombre: lote, cultivo: cult, superficieTeorica: 0 };
+    plan = { id: uid(), loteId, loteNombre: lote, cultivo: cult, campaniaId, campaniaNombre: camp, superficieTeorica: 0 };
     await dbPut("planSiembra", plan);
   }
   return plan;
@@ -250,6 +271,9 @@ function numOrNull(v) {
 }
 
 async function unflattenCarga(fila) {
+  const campaniaId = fila.campaniaNombre
+    ? await resolverIdPorNombre("campanias", fila.campaniaNombre, { activa: false })
+    : null;
   const origenTipo = fila.origenTipo === "silo" ? "silo" : "lote";
   const origenId = await resolverIdPorNombre(
     origenTipo === "silo" ? "silosBolsa" : "lotes",
@@ -275,6 +299,8 @@ async function unflattenCarga(fila) {
   return {
     id: fila.id,
     fecha: fila.fecha,
+    campaniaId,
+    campaniaNombre: String(fila.campaniaNombre || "").trim(),
     origenTipo,
     origenId,
     origenNombre: String(fila.origenNombre || "").trim(),
@@ -342,6 +368,7 @@ async function unflattenMovimiento(fila) {
 async function unflattenAplicacion(fila) {
   const contratistaId = await resolverIdPorNombre("contratistas", fila.contratistaNombre);
   const loteId = await resolverIdPorNombre("lotes", fila.loteNombre);
+  const orden = fila.ordenTrabajoNombre ? await resolverOrden(fila.ordenTrabajoNombre, fila.contratistaNombre) : null;
   const productos = [];
   for (let i = 1; i <= 6; i++) {
     const nombre = fila[`producto${i}Nombre`];
@@ -362,6 +389,8 @@ async function unflattenAplicacion(fila) {
     contratistaNombre: String(fila.contratistaNombre || "").trim(),
     loteId,
     loteNombre: String(fila.loteNombre || "").trim(),
+    ordenTrabajoId: orden ? orden.id : null,
+    ordenTrabajoNombre: orden ? orden.nombre : "",
     hectareas: parseFloat(fila.hectareas) || 0,
     productos,
     comentarios: fila.comentarios || "",
@@ -371,7 +400,7 @@ async function unflattenAplicacion(fila) {
 }
 
 async function unflattenAvance(fila) {
-  const plan = await resolverPlan(fila.loteNombre, fila.cultivo);
+  const plan = await resolverPlan(fila.loteNombre, fila.cultivo, fila.campaniaNombre);
   return {
     id: fila.id,
     fecha: fila.fecha,
@@ -379,6 +408,8 @@ async function unflattenAvance(fila) {
     loteId: plan ? plan.loteId : null,
     loteNombre: String(fila.loteNombre || "").trim(),
     cultivo: String(fila.cultivo || "").trim(),
+    campaniaId: plan ? plan.campaniaId : null,
+    campaniaNombre: String(fila.campaniaNombre || "").trim(),
     hasSembradas: parseFloat(fila.hasSembradas) || 0,
     comentarios: fila.comentarios || "",
     marcaCierre: fila.marcaCierre === true || fila.marcaCierre === "TRUE" || fila.marcaCierre === "true",
@@ -388,13 +419,15 @@ async function unflattenAvance(fila) {
 }
 
 async function unflattenCierre(fila) {
-  const plan = await resolverPlan(fila.loteNombre, fila.cultivo);
+  const plan = await resolverPlan(fila.loteNombre, fila.cultivo, fila.campaniaNombre);
   return {
     id: fila.id,
     planId: plan ? plan.id : null,
     loteId: plan ? plan.loteId : null,
     loteNombre: String(fila.loteNombre || "").trim(),
     cultivo: String(fila.cultivo || "").trim(),
+    campaniaId: plan ? plan.campaniaId : null,
+    campaniaNombre: String(fila.campaniaNombre || "").trim(),
     fecha: fila.fecha,
     semillaKg: numOrNull(fila.semillaKg),
     semillaVariedad: fila.semillaVariedad || null,
@@ -424,6 +457,56 @@ async function unflattenAjusteSiloBolsa(fila) {
   };
 }
 
+// A diferencia de las demás (cuyos ids son estables porque cada dispositivo
+// solo escribe los suyos), una Orden de Trabajo puede existir localmente como
+// placeholder liviano (autocreado por Insumos → Salida o por otra Aplicación
+// que la referenció antes de que llegara esta versión completa) con un id
+// LOCAL distinto al de la fila que estamos trayendo. Por eso se resuelve por
+// NOMBRE — si ya existe una orden con ese nombre, se actualiza en el mismo id
+// en vez de crear una duplicada.
+async function unflattenOrdenTrabajo(fila) {
+  const contratistaId = await resolverIdPorNombre("contratistas", fila.contratistaNombre);
+  const nombresLotes = String(fila.lotesNombres || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const lotes = [];
+  for (const nombreLote of nombresLotes) {
+    const loteId = await resolverIdPorNombre("lotes", nombreLote);
+    lotes.push({ loteId, loteNombre: nombreLote });
+  }
+  const productosPlanificados = [];
+  for (let i = 1; i <= 6; i++) {
+    const nombre = fila[`producto${i}Nombre`];
+    const cantidad = fila[`producto${i}Cantidad`];
+    if (!nombre || cantidad === "" || cantidad === undefined) continue;
+    const productoId = await resolverIdPorNombre("insumos", nombre, { unidad: fila[`producto${i}Unidad`] || "" });
+    productosPlanificados.push({
+      productoId,
+      productoNombre: String(nombre).trim(),
+      unidad: fila[`producto${i}Unidad`] || "",
+      cantidad: parseFloat(cantidad) || 0,
+    });
+  }
+  const nombreOrden = String(fila.nombre || "").trim();
+  const existentes = await dbGetAll("ordenesTrabajo");
+  const existente = existentes.find((o) => o.nombre.trim().toLowerCase() === nombreOrden.toLowerCase());
+  return {
+    id: existente ? existente.id : fila.id,
+    nombre: nombreOrden,
+    contratistaId,
+    contratistaNombre: String(fila.contratistaNombre || "").trim(),
+    lotes,
+    fechaAsignacion: fila.fechaAsignacion || "",
+    fechaLimite: fila.fechaLimite || "",
+    productosPlanificados,
+    observaciones: fila.observaciones || "",
+    fechaCreacion: fila.fechaCreacion || new Date().toISOString(),
+    sincronizado: true,
+    fechaCreacionRegistro: fila.fechaCreacionRegistro || new Date().toISOString(),
+  };
+}
+
 const TIPOS_PULL = [
   { tipo: "cargaGranos", store: "cargasGranos", unflatten: unflattenCarga },
   { tipo: "movimientoInsumo", store: "movimientosInsumos", unflatten: unflattenMovimiento },
@@ -431,6 +514,7 @@ const TIPOS_PULL = [
   { tipo: "avanceSiembra", store: "avanceSiembra", unflatten: unflattenAvance },
   { tipo: "cierreSiembra", store: "cierresSiembra", unflatten: unflattenCierre },
   { tipo: "ajusteSiloBolsa", store: "ajustesSiloBolsa", unflatten: unflattenAjusteSiloBolsa },
+  { tipo: "ordenTrabajo", store: "ordenesTrabajo", unflatten: unflattenOrdenTrabajo },
 ];
 
 async function pullAll() {

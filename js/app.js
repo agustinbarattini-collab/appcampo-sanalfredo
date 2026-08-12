@@ -2,6 +2,7 @@ import { cargaGranosView } from "./cargaGranos.js";
 import { movimientosInsumosView } from "./movimientosInsumos.js";
 import { aplicacionesFitosanitariosView } from "./aplicacionesFitosanitarios.js";
 import { siembraView } from "./siembra.js";
+import { ordenesTrabajoView } from "./ordenesTrabajo.js";
 import { maestrosHubView } from "./maestrosHub.js";
 import { APP_CONFIG } from "./config.js";
 import { syncAll, pullAll, contarPendientes } from "./sync.js";
@@ -11,6 +12,7 @@ const routes = {
   insumos: { view: movimientosInsumosView, label: "Insumos" },
   fitosanitarios: { view: aplicacionesFitosanitariosView, label: "Fitosanitarios" },
   siembra: { view: siembraView, label: "Siembra" },
+  ordenes: { view: ordenesTrabajoView, label: "Órdenes" },
   maestros: { view: maestrosHubView, label: "Maestros" },
 };
 
