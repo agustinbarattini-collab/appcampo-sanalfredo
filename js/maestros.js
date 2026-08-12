@@ -175,20 +175,22 @@ const silosBolsaView = {
   },
 };
 
-// Campañas es de SOLO LECTURA en la app (a diferencia de los demás maestros,
-// que también se pueden crear localmente): la campaña "activa" tiene que ser
-// la misma para todo el equipo, y si se creara/activara desde un celular
-// quedaría solo en ESE dispositivo (los maestros sincronizan Sheet → App,
-// nunca App → Sheet). Se carga y se marca activa en la pestaña "Maestros -
-// Campañas" de la Sheet (columna `activa` en TRUE para una sola fila), y cada
-// celular la trae con el botón "Actualizar desde Sheets" de arriba.
+// Campañas se CREA y se ACTIVA solo desde la planilla (a diferencia de los
+// demás maestros, que también se pueden crear localmente): la campaña
+// "activa" tiene que ser la misma para todo el equipo, y si se creara/
+// activara desde un celular quedaría solo en ESE dispositivo (los maestros
+// sincronizan Sheet → App, nunca App → Sheet). Se carga y se marca activa en
+// la pestaña "Maestros - Campañas" de la Sheet (columna `activa` en TRUE
+// para una sola fila), y cada celular la trae con "Actualizar desde Sheets".
+// "Borrar" sí queda disponible acá: es una limpieza local (ej. una campaña
+// mal tipeada) que no afecta cuál es la activa para los demás dispositivos.
 const campaniasView = {
   async render(container) {
     const campanias = (await dbGetAll("campanias")).sort((a, b) => b.nombre.localeCompare(a.nombre));
     container.innerHTML = `
       <h2>Campañas</h2>
       <div class="card empty-state">
-        Las campañas se cargan y se marcan activas en la planilla (pestaña "Maestros - Campañas"), no desde acá — así todo el equipo ve la misma campaña activa. Tocá "Actualizar desde Sheets" arriba para traer los cambios.
+        Las campañas se cargan y se marcan activas en la planilla (pestaña "Maestros - Campañas"), no desde acá — así todo el equipo ve la misma campaña activa. Tocá "Actualizar desde Sheets" arriba para traer los cambios. "Borrar" es solo una limpieza local (ej. si se trajo una campaña mal tipeada): si la fila sigue en la planilla, va a volver a aparecer la próxima vez que actualices desde Sheets — borrala ahí también.
       </div>
       <div class="card" id="listaContainer">
         ${campanias.length === 0 ? '<div class="empty-state">Todavía no se trajo ninguna campaña de la planilla.</div>' : ""}
@@ -203,7 +205,14 @@ const campaniasView = {
         <div>
           <div><strong>${c.nombre}</strong> ${c.activa ? '<span class="pill sincronizado">Activa</span>' : ""}</div>
         </div>
+        <button class="secondary" data-accion="borrar" data-id="${c.id}">Borrar</button>
       `;
+      row.querySelector('[data-accion="borrar"]').addEventListener("click", async () => {
+        if (confirm(`¿Borrar la campaña "${c.nombre}" de este celular? Las cargas y planes ya registrados bajo esta campaña no se borran, pero quedan sin campaña asociada visible acá. Si esta fila sigue en la planilla, va a volver a aparecer al tocar "Actualizar desde Sheets".`)) {
+          await dbDelete("campanias", c.id);
+          this.render(container);
+        }
+      });
       listaContainer.appendChild(row);
     }
   },
