@@ -1,29 +1,20 @@
-import { dbGetAll, dbPut, dbDelete, uid } from "./db.js";
+import { dbGetAll, dbPut, dbDelete } from "./db.js";
 import { getSilosBolsaConStock } from "./stockUtils.js";
 
+// Solo lectura: se carga y se borra en la planilla, nunca desde acá (a
+// pedido del cliente, para que los maestros no diverjan entre celulares —
+// mismo criterio que Campañas, pero acá ni siquiera "Borrar" queda local).
 function renderMaestroSimple({ store, titulo, campoLabel, extraFields }) {
   return {
     async render(container) {
       const items = (await dbGetAll(store)).sort((a, b) => a.nombre.localeCompare(b.nombre));
       container.innerHTML = `
         <h2>${titulo}</h2>
-        <div class="card">
-          <form id="formNuevo">
-            <div class="field">
-              <label>${campoLabel}</label>
-              <input type="text" id="fNombre" required />
-            </div>
-            ${(extraFields || []).map((f) => `
-              <div class="field">
-                <label>${f.label}</label>
-                <input type="${f.type || "text"}" id="f_${f.key}" ${f.step ? `step="${f.step}"` : ""} ${f.required ? "required" : ""} />
-              </div>
-            `).join("")}
-            <button type="submit">Agregar</button>
-          </form>
+        <div class="card empty-state">
+          Esto se carga y se corrige en la planilla, no desde acá. Tocá "Actualizar desde Sheets" arriba para traer los cambios.
         </div>
         <div class="card" id="listaContainer">
-          ${items.length === 0 ? '<div class="empty-state">Todavía no cargaste ninguno.</div>' : ""}
+          ${items.length === 0 ? '<div class="empty-state">Todavía no se trajo ninguno de la planilla.</div>' : ""}
         </div>
       `;
 
@@ -39,31 +30,9 @@ function renderMaestroSimple({ store, titulo, campoLabel, extraFields }) {
             <div><strong>${item.nombre}</strong></div>
             ${extraTxt ? `<div class="muted">${extraTxt}</div>` : ""}
           </div>
-          <button class="secondary" data-id="${item.id}">Borrar</button>
         `;
-        row.querySelector("button").addEventListener("click", async () => {
-          if (confirm(`¿Borrar "${item.nombre}"?`)) {
-            await dbDelete(store, item.id);
-            this.render(container);
-          }
-        });
         listaContainer.appendChild(row);
       }
-
-      container.querySelector("#formNuevo").addEventListener("submit", async (e) => {
-        e.preventDefault();
-        const nombre = container.querySelector("#fNombre").value.trim();
-        if (!nombre) return;
-        const record = { id: uid(), nombre };
-        for (const f of extraFields || []) {
-          const el = container.querySelector(`#f_${f.key}`);
-          let val = el.value;
-          if (f.type === "number") val = val === "" ? 0 : parseFloat(val);
-          record[f.key] = val;
-        }
-        await dbPut(store, record);
-        this.render(container);
-      });
     },
   };
 }
@@ -100,30 +69,21 @@ const insumosView = renderMaestroSimple({
   extraFields: [{ key: "unidad", label: "Unidad (kg, L, bolsas...)", type: "text", required: true }],
 });
 
+// El alta/borrado de silos es solo desde la planilla, igual que los demás
+// maestros. "Finalizar" (desde Carga de Granos, al último camión) y
+// "Reactivar" (acá) SÍ quedan disponibles: no son "dar de alta" un maestro
+// nuevo, son parte del flujo operativo diario y no tienen forma de hacerse
+// desde la Sheet (el stock/residual es siempre calculado, nunca una columna).
 const silosBolsaView = {
   async render(container) {
     const silos = (await getSilosBolsaConStock()).sort((a, b) => a.nombre.localeCompare(b.nombre));
     container.innerHTML = `
       <h2>Silos Bolsa</h2>
-      <div class="card">
-        <form id="formNuevo">
-          <div class="field">
-            <label>Identificador del silo bolsa</label>
-            <input type="text" id="fNombre" required />
-          </div>
-          <div class="field">
-            <label>Cultivo</label>
-            <input type="text" id="fCultivo" />
-          </div>
-          <div class="field">
-            <label>Kg totales embolsados</label>
-            <input type="number" step="1" id="fKgTotal" required />
-          </div>
-          <button type="submit">Agregar</button>
-        </form>
+      <div class="card empty-state">
+        Esto se carga y se corrige en la planilla, no desde acá. Tocá "Actualizar desde Sheets" arriba para traer los cambios. "Reactivar" es la única acción que queda disponible acá (deshace un "Finalizar" hecho por error).
       </div>
       <div class="card" id="listaContainer">
-        ${silos.length === 0 ? '<div class="empty-state">Todavía no cargaste ninguno.</div>' : ""}
+        ${silos.length === 0 ? '<div class="empty-state">Todavía no se trajo ninguno de la planilla.</div>' : ""}
       </div>
     `;
 
@@ -136,17 +96,8 @@ const silosBolsaView = {
           <div><strong>${s.nombre}</strong> ${s.finalizado ? '<span class="pill sincronizado">Finalizado</span>' : ""}</div>
           <div class="muted">${s.cultivo ? s.cultivo + " · " : ""}${s.kgResidual} kg restantes de ${s.kgTotalInicial} kg</div>
         </div>
-        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
-          ${s.finalizado ? '<button class="secondary" data-accion="reactivar" data-id="' + s.id + '">Reactivar</button>' : ""}
-          <button class="secondary" data-accion="borrar" data-id="${s.id}">Borrar</button>
-        </div>
+        ${s.finalizado ? '<button class="secondary" data-accion="reactivar" data-id="' + s.id + '">Reactivar</button>' : ""}
       `;
-      row.querySelector('[data-accion="borrar"]').addEventListener("click", async () => {
-        if (confirm(`¿Borrar "${s.nombre}"? Esto no borra las cargas ya registradas desde este silo.`)) {
-          await dbDelete("silosBolsa", s.id);
-          this.render(container);
-        }
-      });
       const btnReactivar = row.querySelector('[data-accion="reactivar"]');
       if (btnReactivar) {
         btnReactivar.addEventListener("click", async () => {
@@ -159,19 +110,6 @@ const silosBolsaView = {
       }
       listaContainer.appendChild(row);
     }
-
-    container.querySelector("#formNuevo").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const nombre = container.querySelector("#fNombre").value.trim();
-      if (!nombre) return;
-      await dbPut("silosBolsa", {
-        id: uid(),
-        nombre,
-        cultivo: container.querySelector("#fCultivo").value.trim(),
-        kgTotalInicial: parseFloat(container.querySelector("#fKgTotal").value) || 0,
-      });
-      this.render(container);
-    });
   },
 };
 

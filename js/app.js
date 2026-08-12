@@ -5,7 +5,7 @@ import { siembraView } from "./siembra.js";
 import { ordenesTrabajoView } from "./ordenesTrabajo.js";
 import { maestrosHubView } from "./maestrosHub.js";
 import { APP_CONFIG } from "./config.js";
-import { syncAll, pullAll, contarPendientes } from "./sync.js";
+import { syncAll, pullAll, importarMaestros, contarPendientes } from "./sync.js";
 
 const routes = {
   carga: { view: cargaGranosView, label: "Carga de Granos" },
@@ -70,6 +70,9 @@ async function updateSyncStatus() {
 async function runSync() {
   await syncAll();
   await pullAll();
+  // Trae Lotes/Silos/Corredores/etc. de la Sheet sin depender de que alguien
+  // toque "Actualizar desde Sheets" a mano en Maestros.
+  await importarMaestros();
   await updateSyncStatus();
   // Refresca la vista actual por si trajo datos nuevos de otros dispositivos.
   await router();

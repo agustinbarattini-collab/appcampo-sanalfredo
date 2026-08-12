@@ -107,15 +107,6 @@ const cargaGranosView = {
         </div>`;
       return;
     }
-    if (corredores.length === 0) {
-      container.innerHTML = `
-        <h2>Carga de Granos de Campo</h2>
-        <div class="card empty-state">
-          Todavía no cargaste ningún <strong>Corredor</strong> (destino).<br/>
-          Andá a la sección Maestros para cargarlo antes de registrar una carga.
-        </div>`;
-      return;
-    }
     if (campanias.length === 0) {
       container.innerHTML = `
         <h2>Carga de Granos de Campo</h2>
@@ -208,7 +199,7 @@ const cargaGranosView = {
 
           <div class="field">
             <label>Destino (Corredor)</label>
-            <select id="fCorredorId" required></select>
+            <select id="fCorredorId"></select>
           </div>
 
           <div class="field">
