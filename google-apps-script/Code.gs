@@ -12,6 +12,12 @@ const SHARED_SECRET = "REEMPLAZAR_CON_UN_TOKEN_SECRETO";
 // empresas aunque varias usen la misma cuenta de Google.
 const EMPRESA_NOMBRE = "San Alfredo";
 
+// Opcional: ID de una carpeta de Drive YA EXISTENTE donde tiene que vivir
+// "App de Campo - Fotos", en vez de crearse suelta en la raíz de Drive. Se
+// saca del final de la URL de esa carpeta: drive.google.com/drive/folders/ESTE_ID
+// Dejar en "" para que se cree en la raíz de Drive (comportamiento por defecto).
+const CARPETA_DRIVE_PADRE_ID = "";
+
 const SHEETS = {
   cargaGranos: {
     name: "Carga de Granos",
@@ -201,7 +207,8 @@ function guardarFotoEnDrive(fotoBase64, tipo, idRegistro) {
     const datos = partes.length > 1 ? partes[1] : partes[0];
     const bytes = Utilities.base64Decode(datos);
     const blob = Utilities.newBlob(bytes, "image/jpeg", (idRegistro || "foto") + ".jpg");
-    const raiz = obtenerOCrearCarpeta("App de Campo - Fotos", null);
+    const carpetaPadre = CARPETA_DRIVE_PADRE_ID ? DriveApp.getFolderById(CARPETA_DRIVE_PADRE_ID) : null;
+    const raiz = obtenerOCrearCarpeta("App de Campo - Fotos", carpetaPadre);
     const carpetaEmpresa = obtenerOCrearCarpeta(EMPRESA_NOMBRE, raiz);
     const carpetaTema = obtenerOCrearCarpeta(CARPETAS_POR_TIPO[tipo] || "Otros", carpetaEmpresa);
     const file = carpetaTema.createFile(blob);
