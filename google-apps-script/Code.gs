@@ -7,6 +7,11 @@
 // Reemplazar por un texto random propio (no hace falta recordarlo, solo copiarlo a config.js).
 const SHARED_SECRET = "REEMPLAZAR_CON_UN_TOKEN_SECRETO";
 
+// Nombre de la empresa: se usa para armar la carpeta de Drive donde se guardan
+// las fotos (ver guardarFotoEnDrive), para que quede clara la separación entre
+// empresas aunque varias usen la misma cuenta de Google.
+const EMPRESA_NOMBRE = "San Alfredo";
+
 const SHEETS = {
   cargaGranos: {
     name: "Carga de Granos",
@@ -20,6 +25,8 @@ const SHEETS = {
       "origen2Tipo", "origen2Nombre", "kgOrigen2",
       // Va al final por el mismo motivo: no correr de lugar los datos ya cargados.
       "campaniaNombre",
+      // La foto del ticket/báscula, si se sacó una (ver guardarFotoEnDrive).
+      "fotoUrl",
     ],
   },
   movimientoInsumo: {
@@ -28,6 +35,8 @@ const SHEETS = {
       "id", "tipo", "fecha", "proveedorNombre", "ordenTrabajoNombre", "contratistaNombre",
       "insumoNombre", "unidad", "cantidad", "observaciones", "fechaCreacionRegistro",
       "fechaSincronizacion",
+      // La foto del remito, si se sacó una (ver guardarFotoEnDrive).
+      "fotoUrl",
     ],
   },
   aplicacionFitosanitaria: {
@@ -156,18 +165,57 @@ function doPost(e) {
       sheet = ss.getSheetByName(cfg.name);
     }
     const r = body.registro || {};
+    let fotoUrl = "";
+    if (r.fotoBase64) {
+      fotoUrl = guardarFotoEnDrive(r.fotoBase64, body.tipo, r.id);
+    }
     const row = cfg.headers.map(function (h) {
       if (h === "fechaSincronizacion") return new Date().toISOString();
+      if (h === "fotoUrl") return fotoUrl;
       const v = r[h];
       if (v === undefined || v === null) return "";
       if (typeof v === "object") return JSON.stringify(v);
       return v;
     });
     sheet.appendRow(row);
-    return respond({ ok: true });
+    return respond({ ok: true, fotoUrl: fotoUrl });
   } catch (err) {
     return respond({ ok: false, error: String(err) });
   }
+}
+
+// Carpeta de Drive por tipo de registro, dentro de "App de Campo - Fotos/<EMPRESA_NOMBRE>/".
+// Agregar una entrada acá cuando se sume otro formulario con foto (ej. Órdenes de Trabajo).
+const CARPETAS_POR_TIPO = {
+  cargaGranos: "Carga de Granos",
+  movimientoInsumo: "Insumos - Remitos",
+};
+
+// Guarda la foto (viene en base64 desde el cliente, ya comprimida) en Drive,
+// ordenada en "App de Campo - Fotos/<empresa>/<tema>/", y devuelve el link.
+// Si algo falla, devuelve "" en vez de tirar error — no tiene que bloquear
+// el guardado del resto del registro por un problema con la foto.
+function guardarFotoEnDrive(fotoBase64, tipo, idRegistro) {
+  try {
+    const partes = String(fotoBase64).split(",");
+    const datos = partes.length > 1 ? partes[1] : partes[0];
+    const bytes = Utilities.base64Decode(datos);
+    const blob = Utilities.newBlob(bytes, "image/jpeg", (idRegistro || "foto") + ".jpg");
+    const raiz = obtenerOCrearCarpeta("App de Campo - Fotos", null);
+    const carpetaEmpresa = obtenerOCrearCarpeta(EMPRESA_NOMBRE, raiz);
+    const carpetaTema = obtenerOCrearCarpeta(CARPETAS_POR_TIPO[tipo] || "Otros", carpetaEmpresa);
+    const file = carpetaTema.createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    return file.getUrl();
+  } catch (err) {
+    return "";
+  }
+}
+
+function obtenerOCrearCarpeta(nombre, padre) {
+  const base = padre || DriveApp;
+  const existentes = base.getFoldersByName(nombre);
+  return existentes.hasNext() ? existentes.next() : base.createFolder(nombre);
 }
 
 function responderMaestros() {

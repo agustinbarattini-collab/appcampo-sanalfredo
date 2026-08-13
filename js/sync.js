@@ -14,6 +14,34 @@ function flattenMovimiento(r) {
   return { ...r, foto: undefined };
 }
 
+// Achica la foto antes de mandarla (una foto de cámara sin comprimir puede
+// pesar varios MB, lento/caro en datos móviles) y la devuelve en base64 lista
+// para mandar en el body del POST. Se corre recién al sincronizar (no al
+// sacar la foto), así que tiene que funcionar aunque el Blob venga de una
+// captura vieja guardada offline.
+function comprimirFotoABase64(blob, maxDim = 1600, calidad = 0.7) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(blob);
+    img.onload = () => {
+      const escala = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const w = Math.round(img.width * escala) || 1;
+      const h = Math.round(img.height * escala) || 1;
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL("image/jpeg", calidad));
+    };
+    img.onerror = (err) => {
+      URL.revokeObjectURL(url);
+      reject(err);
+    };
+    img.src = url;
+  });
+}
+
 function flattenAplicacion(r) {
   const out = { ...r };
   (r.productos || []).forEach((p, i) => {
@@ -92,9 +120,18 @@ async function syncAll(onProgress) {
       const pendientes = items.filter((r) => !r.sincronizado);
       for (const registro of pendientes) {
         try {
-          const data = await llamarBackend({ tipo, registro: flatten(registro) });
+          const payload = flatten(registro);
+          if (registro.foto && !registro.fotoUrl) {
+            try {
+              payload.fotoBase64 = await comprimirFotoABase64(registro.foto);
+            } catch (err) {
+              console.warn("No se pudo preparar la foto para subir (se sincroniza el resto igual):", tipo, err);
+            }
+          }
+          const data = await llamarBackend({ tipo, registro: payload });
           if (data.ok) {
             registro.sincronizado = true;
+            if (data.fotoUrl) registro.fotoUrl = data.fotoUrl;
             await dbPut(store, registro);
           } else {
             console.warn("Sync rechazado por el servidor:", tipo, data.error);

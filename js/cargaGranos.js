@@ -223,6 +223,7 @@ const cargaGranosView = {
           <div class="field">
             <label>Foto (opcional)</label>
             <input type="file" accept="image/*" capture="environment" id="fFoto" />
+            <div class="muted">Se sube a Google Drive al sincronizar y queda linkeada en la planilla.</div>
           </div>
 
           <div class="field">
@@ -526,10 +527,15 @@ async function renderListadoCargas(container, campanias, state, campaniaActiva) 
       ? `<strong>${c.origenNombre}</strong> (${c.origenTipo === "silo" ? "Silo Bolsa" : "Lote"}) + <strong>${c.origen2Nombre}</strong> (${c.origen2Tipo === "silo" ? "Silo Bolsa" : "Lote"})`
       : `<strong>${c.origenNombre}</strong> (${c.origenTipo === "silo" ? "Silo Bolsa" : "Lote"})`;
     const kgTxt = c.origen2Nombre ? `${c.kgNeto} kg netos (${kgOrigen1} + ${kgOrigen2})` : `${c.kgNeto} kg netos`;
+    const fotoTxt = c.fotoUrl
+      ? ` · <a href="${c.fotoUrl}" target="_blank" rel="noopener">Ver foto</a>`
+      : c.foto
+      ? " · Foto pendiente de subir"
+      : "";
     row.innerHTML = `
       <div>
         <div>${origenTxt} → ${c.corredorNombre}</div>
-        <div class="muted">${c.fecha?.replace("T", " ")} · ${c.cultivo} · ${kgTxt}</div>
+        <div class="muted">${c.fecha?.replace("T", " ")} · ${c.cultivo} · ${kgTxt}${fotoTxt}</div>
       </div>
       <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
         <span class="pill ${c.sincronizado ? "sincronizado" : "pendiente"}">${c.sincronizado ? "Sincronizado" : "Pendiente"}</span>

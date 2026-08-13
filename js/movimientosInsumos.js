@@ -118,7 +118,7 @@ function renderFormIngreso(container, formArea, { proveedores, insumos }, onSave
       <div class="field">
         <label>Foto del remito (opcional)</label>
         <input type="file" accept="image/*" capture="environment" id="fFoto" />
-        <div class="muted">Por ahora la foto queda adjunta al registro. El autocompletado automático de estos datos a partir de la foto es una mejora pendiente.</div>
+        <div class="muted">Se sube a Google Drive al sincronizar y queda linkeada en la planilla. El autocompletado automático de estos datos a partir de la foto es una mejora pendiente.</div>
       </div>
       <div class="field">
         <label>Observaciones</label>
@@ -375,10 +375,15 @@ async function renderListadoMovs(container) {
     if (m.tipo === "ingreso") detalle = `de ${m.proveedorNombre}`;
     else if (m.tipo === "salida") detalle = `orden ${m.ordenTrabajoNombre} (${m.contratistaNombre})`;
     else detalle = `orden ${m.ordenTrabajoNombre}`;
+    const fotoTxt = m.fotoUrl
+      ? ` · <a href="${m.fotoUrl}" target="_blank" rel="noopener">Ver foto</a>`
+      : m.foto
+      ? " · Foto pendiente de subir"
+      : "";
     row.innerHTML = `
       <div>
         <div><span class="pill">${etiquetas[m.tipo]}</span> <strong>${m.insumoNombre}</strong> — ${m.cantidad} ${m.unidad || ""}</div>
-        <div class="muted">${m.fecha?.replace("T", " ")} · ${detalle}</div>
+        <div class="muted">${m.fecha?.replace("T", " ")} · ${detalle}${fotoTxt}</div>
       </div>
       <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
         <span class="pill ${m.sincronizado ? "sincronizado" : "pendiente"}">${m.sincronizado ? "Sincronizado" : "Pendiente"}</span>
