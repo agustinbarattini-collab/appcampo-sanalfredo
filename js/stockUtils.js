@@ -1,19 +1,58 @@
 import { dbGetAll } from "./db.js";
 
+// Agrupa los maestros de Silo Bolsa por nombre+cultivo: puede haber más de
+// uno con el mismo nombre (ej. varios bolsones que en el campo se llaman
+// igual, cargados como filas separadas en la Sheet) — se tratan como un solo
+// pool, sumando sus kg iniciales y su consumo, para que el stock y las
+// diferencias al finalizar se calculen contra el total real, no contra una
+// sola de las filas.
+function agruparSilosPorNombreCultivo(silos) {
+  const grupos = new Map();
+  for (const s of silos) {
+    const key = s.nombre.trim().toLowerCase() + "|" + (s.cultivo || "").trim().toLowerCase();
+    if (!grupos.has(key)) grupos.set(key, []);
+    grupos.get(key).push(s);
+  }
+  return [...grupos.values()];
+}
+
 async function getSilosBolsaConStock() {
   const [silos, cargas] = await Promise.all([dbGetAll("silosBolsa"), dbGetAll("cargasGranos")]);
-  return silos.map((s) => {
+
+  return agruparSilosPorNombreCultivo(silos).map((miembros) => {
+    // Representante estable de cara a la UI (el origen que se guarda en la
+    // Carga de Granos): el id más "viejo" — uid() arranca con un timestamp,
+    // así que ordenar los ids alfabéticamente también los ordena por fecha
+    // de creación.
+    const ids = miembros.map((m) => m.id);
+    const idRepresentante = ids.slice().sort()[0];
+    const representante = miembros.find((m) => m.id === idRepresentante);
+
     let usado = 0;
     for (const c of cargas) {
       const kgOrigen2 = c.kgOrigen2 || 0;
       const kgOrigen1 = (c.kgNeto || 0) - kgOrigen2;
-      if (c.origenTipo === "silo" && c.origenId === s.id) usado += kgOrigen1;
-      if (c.origen2Tipo === "silo" && c.origen2Id === s.id) usado += kgOrigen2;
+      if (c.origenTipo === "silo" && ids.includes(c.origenId)) usado += kgOrigen1;
+      if (c.origen2Tipo === "silo" && ids.includes(c.origen2Id)) usado += kgOrigen2;
     }
+
+    const kgTotalInicial = miembros.reduce((sum, m) => sum + (m.kgTotalInicial || 0), 0);
     // Un silo finalizado queda en 0 aunque el cálculo teórico diera otro número
     // (la diferencia real ya quedó registrada como ajuste al finalizarlo).
-    const kgResidual = s.finalizado ? 0 : Math.max(0, (s.kgTotalInicial || 0) - usado);
-    return { ...s, kgUsado: usado, kgResidual };
+    // El grupo entero se considera finalizado recién cuando TODOS sus
+    // miembros lo están (ver finalizarSiloBolsa, que los finaliza a la vez).
+    const finalizado = miembros.every((m) => m.finalizado);
+    const kgResidual = finalizado ? 0 : Math.max(0, kgTotalInicial - usado);
+
+    return {
+      ...representante,
+      id: idRepresentante,
+      kgTotalInicial,
+      kgUsado: usado,
+      kgResidual,
+      finalizado,
+      cantidadMiembros: miembros.length,
+    };
   });
 }
 
@@ -172,6 +211,7 @@ async function getOrdenesConEstado() {
 
 export {
   getSilosBolsaConStock,
+  agruparSilosPorNombreCultivo,
   getStockGranosPorCultivo,
   getInsumosConStock,
   getSaldoOrden,

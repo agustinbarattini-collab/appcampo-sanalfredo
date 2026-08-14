@@ -1,5 +1,5 @@
 import { dbGetAll, dbGet, dbPut, dbDelete, uid } from "./db.js";
-import { getSilosBolsaConStock, getStockGranosPorCultivo } from "./stockUtils.js";
+import { getSilosBolsaConStock, getStockGranosPorCultivo, agruparSilosPorNombreCultivo } from "./stockUtils.js";
 
 const STORE = "cargasGranos";
 const STORE_AJUSTES = "ajustesSiloBolsa";
@@ -54,21 +54,33 @@ function renderStockGranosCard(container, stock) {
 // residual y lo que realmente se retiró en este último camión. diferenciaKg
 // positiva = sobrante (se sacó más de lo que decía la app calculada);
 // negativa = faltante (se sacó menos de lo esperado, mermó en el camino).
+// siloId es el "representante" del grupo (ver getSilosBolsaConStock): si hay
+// más de un maestro con el mismo nombre+cultivo, se finalizan TODOS a la vez
+// y el ajuste se calcula contra la suma de sus kg iniciales, no solo la del
+// representante.
 async function finalizarSiloBolsa(siloId, kgResidualAntes, kgEsteViaje, fechaCarga) {
   const silo = await dbGet("silosBolsa", siloId);
   if (!silo) return null;
+  const todosLosSilos = await dbGetAll("silosBolsa");
+  const grupo = agruparSilosPorNombreCultivo(todosLosSilos).find((miembros) =>
+    miembros.some((m) => m.id === siloId)
+  ) || [silo];
+  const kgTotalInicialGrupo = grupo.reduce((sum, m) => sum + (m.kgTotalInicial || 0), 0);
+
   const diferenciaKg = Math.round((kgEsteViaje - kgResidualAntes) * 100) / 100;
-  await dbPut("silosBolsa", { ...silo, finalizado: true, fechaFinalizacion: new Date().toISOString() });
+  for (const m of grupo) {
+    await dbPut("silosBolsa", { ...m, finalizado: true, fechaFinalizacion: new Date().toISOString() });
+  }
   const ajuste = {
     id: uid(),
     fecha: fechaCarga,
     siloBolsaNombre: silo.nombre,
     cultivo: silo.cultivo || "",
-    kgTotalInicial: silo.kgTotalInicial || 0,
-    kgTotalRetirado: Math.round(((silo.kgTotalInicial || 0) + diferenciaKg) * 100) / 100,
+    kgTotalInicial: kgTotalInicialGrupo,
+    kgTotalRetirado: Math.round((kgTotalInicialGrupo + diferenciaKg) * 100) / 100,
     diferenciaKg,
     tipoDiferencia: diferenciaKg > 0 ? "sobrante" : diferenciaKg < 0 ? "faltante" : "exacto",
-    observaciones: "",
+    observaciones: grupo.length > 1 ? `Suma de ${grupo.length} silos cargados con el mismo nombre y cultivo.` : "",
     sincronizado: false,
     fechaCreacionRegistro: new Date().toISOString(),
   };
@@ -167,8 +179,12 @@ const cargaGranosView = {
               </select>
               <select id="fOrigen2Id"></select>
             </div>
-            <label style="margin-top:8px;">Kg netos que vinieron del segundo origen</label>
+            <label style="margin-top:8px;">Kg netos 2do origen</label>
             <input type="number" step="1" id="fKgOrigen2" placeholder="Ej: 8000" />
+            <div class="field hidden" id="bloqueNetoTotal" style="margin-top:8px;">
+              <label>Kg netos total</label>
+              <div class="pill" id="fNetoTotal" style="font-size:1rem;padding:8px 12px;">0</div>
+            </div>
             <div class="field hidden" id="bloqueFinalizarOrigen2" style="margin-top:6px;">
               <label class="checkbox-field"><input type="checkbox" id="fFinalizarOrigen2" /> Este es el último camión de este silo bolsa — finalizarlo</label>
             </div>
@@ -203,7 +219,7 @@ const cargaGranosView = {
           </div>
 
           <div class="field">
-            <label>Kg netos</label>
+            <label id="fNetoLabel">Kg netos</label>
             <input type="number" step="1" id="fNeto" required />
           </div>
 
@@ -291,7 +307,21 @@ const cargaGranosView = {
     const fKgOrigen2 = container.querySelector("#fKgOrigen2");
     const bloqueFinalizarOrigen2 = container.querySelector("#bloqueFinalizarOrigen2");
     const fFinalizarOrigen2 = container.querySelector("#fFinalizarOrigen2");
+    const fNeto = container.querySelector("#fNeto");
+    const fNetoLabel = container.querySelector("#fNetoLabel");
+    const bloqueNetoTotal = container.querySelector("#bloqueNetoTotal");
+    const fNetoTotal = container.querySelector("#fNetoTotal");
     let origen2Activo = false;
+
+    // Cada origen se pesa/mide por separado (no hay una sola báscula para el
+    // camión entero), así que kg netos de cada uno se cargan directo y el
+    // total se calcula sumando — nunca restando uno del otro.
+    function actualizarNetoTotal() {
+      if (!origen2Activo) return;
+      const kg1 = parseFloat(fNeto.value) || 0;
+      const kg2 = parseFloat(fKgOrigen2.value) || 0;
+      fNetoTotal.textContent = (kg1 + kg2).toLocaleString("es-AR");
+    }
 
     async function actualizarOrigen2() {
       await poblarOrigenSelect(origen2IdSel, origen2TipoSel.value);
@@ -302,12 +332,17 @@ const cargaGranosView = {
       origen2Activo = true;
       bloqueOrigen2.classList.remove("hidden");
       btnToggleOrigen2.classList.add("hidden");
+      fNetoLabel.textContent = "Kg netos 1er origen";
+      bloqueNetoTotal.classList.remove("hidden");
       await actualizarOrigen2();
+      actualizarNetoTotal();
     }
     function desactivarOrigen2() {
       origen2Activo = false;
       bloqueOrigen2.classList.add("hidden");
       btnToggleOrigen2.classList.remove("hidden");
+      fNetoLabel.textContent = "Kg netos";
+      bloqueNetoTotal.classList.add("hidden");
       origen2IdSel.value = "";
       fKgOrigen2.value = "";
       fFinalizarOrigen2.checked = false;
@@ -315,6 +350,8 @@ const cargaGranosView = {
     btnToggleOrigen2.addEventListener("click", activarOrigen2);
     btnQuitarOrigen2.addEventListener("click", desactivarOrigen2);
     origen2TipoSel.addEventListener("change", actualizarOrigen2);
+    fNeto.addEventListener("input", actualizarNetoTotal);
+    fKgOrigen2.addEventListener("input", actualizarNetoTotal);
 
     await poblarCorredorSelect(container.querySelector("#fCorredorId"));
 
@@ -344,7 +381,7 @@ const cargaGranosView = {
         alert("Elegí el origen (lote o silo bolsa).");
         return;
       }
-      const neto = parseFloat(container.querySelector("#fNeto").value) || 0;
+      const kgOrigen1 = parseFloat(container.querySelector("#fNeto").value) || 0;
 
       let kgOrigen2 = 0;
       let origen2Id = "";
@@ -360,15 +397,11 @@ const cargaGranosView = {
         }
         kgOrigen2 = parseFloat(fKgOrigen2.value) || 0;
         if (kgOrigen2 <= 0) {
-          alert("Ingresá los kg que vinieron del segundo origen.");
-          return;
-        }
-        if (kgOrigen2 >= neto) {
-          alert(`Los kg del segundo origen (${kgOrigen2}) tienen que ser menores a los kg netos totales (${neto}).`);
+          alert("Ingresá los kg netos del segundo origen.");
           return;
         }
       }
-      const kgOrigen1 = neto - kgOrigen2;
+      const neto = kgOrigen1 + kgOrigen2;
 
       let origenNombre = "";
       let silo1KgResidual = null;

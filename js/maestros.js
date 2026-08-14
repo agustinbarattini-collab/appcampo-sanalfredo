@@ -1,5 +1,5 @@
 import { dbGetAll, dbPut, dbDelete } from "./db.js";
-import { getSilosBolsaConStock } from "./stockUtils.js";
+import { getSilosBolsaConStock, agruparSilosPorNombreCultivo } from "./stockUtils.js";
 
 // Solo lectura: se carga y se borra en la planilla, nunca desde acá (a
 // pedido del cliente, para que los maestros no diverjan entre celulares —
@@ -94,7 +94,7 @@ const silosBolsaView = {
       row.innerHTML = `
         <div>
           <div><strong>${s.nombre}</strong> ${s.finalizado ? '<span class="pill sincronizado">Finalizado</span>' : ""}</div>
-          <div class="muted">${s.cultivo ? s.cultivo + " · " : ""}${s.kgResidual} kg restantes de ${s.kgTotalInicial} kg</div>
+          <div class="muted">${s.cultivo ? s.cultivo + " · " : ""}${s.kgResidual} kg restantes de ${s.kgTotalInicial} kg${s.cantidadMiembros > 1 ? ` (suma de ${s.cantidadMiembros} filas con este nombre)` : ""}</div>
         </div>
         ${s.finalizado ? '<button class="secondary" data-accion="reactivar" data-id="' + s.id + '">Reactivar</button>' : ""}
       `;
@@ -102,8 +102,17 @@ const silosBolsaView = {
       if (btnReactivar) {
         btnReactivar.addEventListener("click", async () => {
           if (confirm(`¿Reactivar "${s.nombre}"? Va a volver a aparecer como origen disponible en Carga de Granos.`)) {
-            const { finalizado, fechaFinalizacion, kgUsado, kgResidual, ...base } = s;
-            await dbPut("silosBolsa", base);
+            // s puede representar varios maestros agrupados por nombre+cultivo
+            // (ver getSilosBolsaConStock) — hay que reactivar cada uno con sus
+            // propios datos, no pisarlos con los valores agregados del grupo.
+            const todosLosSilos = await dbGetAll("silosBolsa");
+            const grupo = agruparSilosPorNombreCultivo(todosLosSilos).find((miembros) =>
+              miembros.some((m) => m.id === s.id)
+            ) || [];
+            for (const m of grupo) {
+              const { finalizado, fechaFinalizacion, ...base } = m;
+              await dbPut("silosBolsa", base);
+            }
             this.render(container);
           }
         });
