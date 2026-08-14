@@ -164,6 +164,8 @@ const cargaGranosView = {
               </select>
               <select id="fOrigenId" required></select>
             </div>
+            <label id="fNetoLabel" style="margin-top:8px;">Kg netos</label>
+            <input type="number" step="1" id="fNeto" required />
             <div class="field hidden" id="bloqueFinalizarOrigen1" style="margin-top:6px;">
               <label class="checkbox-field"><input type="checkbox" id="fFinalizarOrigen1" /> Este es el último camión de este silo bolsa — finalizarlo</label>
             </div>
@@ -181,14 +183,15 @@ const cargaGranosView = {
             </div>
             <label style="margin-top:8px;">Kg netos 2do origen</label>
             <input type="number" step="1" id="fKgOrigen2" placeholder="Ej: 8000" />
-            <div class="field hidden" id="bloqueNetoTotal" style="margin-top:8px;">
-              <label>Kg netos total</label>
-              <div class="pill" id="fNetoTotal" style="font-size:1rem;padding:8px 12px;">0</div>
-            </div>
             <div class="field hidden" id="bloqueFinalizarOrigen2" style="margin-top:6px;">
               <label class="checkbox-field"><input type="checkbox" id="fFinalizarOrigen2" /> Este es el último camión de este silo bolsa — finalizarlo</label>
             </div>
             <button type="button" class="secondary" id="btnQuitarOrigen2" style="margin-top:8px;">Quitar segundo origen</button>
+          </div>
+
+          <div class="field hidden" id="bloqueNetoTotal">
+            <label>Kg netos total</label>
+            <div class="pill" id="fNetoTotal" style="font-size:1rem;padding:8px 12px;">0</div>
           </div>
 
           <div class="row">
@@ -216,11 +219,6 @@ const cargaGranosView = {
           <div class="field">
             <label>Destino (Corredor)</label>
             <select id="fCorredorId"></select>
-          </div>
-
-          <div class="field">
-            <label id="fNetoLabel">Kg netos</label>
-            <input type="number" step="1" id="fNeto" required />
           </div>
 
           <div class="field">
