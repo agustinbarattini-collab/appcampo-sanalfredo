@@ -132,6 +132,12 @@ const cargaGranosView = {
     const campaniaActiva = campanias.find((c) => c.activa) || null;
     if (this.state.campaniaFiltro === null) {
       this.state.campaniaFiltro = campaniaActiva ? campaniaActiva.id : "";
+    } else if (this.state.campaniaFiltro && !campanias.some((c) => c.id === this.state.campaniaFiltro)) {
+      // La campaña que se estaba filtrando ya no existe (se borró en Maestros,
+      // ej. una duplicada mal traída) — el <select> vuelve a mostrar "Todas"
+      // por defecto al no encontrar ninguna opción "selected", pero el filtro
+      // seguía usando ese id viejo y mostraba 0 resultados sin explicación.
+      this.state.campaniaFiltro = "";
     }
 
     container.innerHTML = `
