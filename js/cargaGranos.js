@@ -498,9 +498,7 @@ const cargaGranosView = {
 
       window.dispatchEvent(new Event("appcampo-sync-now"));
 
-      if (mensajesAjuste.length > 0) {
-        alert(mensajesAjuste.join("\n\n"));
-      }
+      alert(["Carga registrada.", ...mensajesAjuste].join("\n\n"));
 
       this.render(container);
     });
