@@ -33,6 +33,10 @@ const SHEETS = {
       "campaniaNombre",
       // La foto del ticket/báscula, si se sacó una (ver guardarFotoEnDrive).
       "fotoUrl",
+      // Kg netos del 1er origen, explícito (antes solo se guardaba el total
+      // en "kgNeto" y kgOrigen2 del 2do origen, sin ninguna columna para el
+      // 1ro — quedaba implícito y no se podía ver en la planilla).
+      "kgOrigen1",
     ],
   },
   movimientoInsumo: {

@@ -461,6 +461,7 @@ const cargaGranosView = {
         origen2Tipo,
         origen2Id: origen2Activo ? origen2Id : "",
         origen2Nombre,
+        kgOrigen1,
         kgOrigen2,
         cultivo: fCultivo.value.trim(),
         ctg: container.querySelector("#fCtg").value.trim(),
