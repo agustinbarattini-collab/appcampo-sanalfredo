@@ -98,8 +98,6 @@ function mensajeAjuste(ajuste) {
 }
 
 const cargaGranosView = {
-  state: { campaniaFiltro: null },
-
   async render(container) {
     const [lotes, silos, corredores, campanias, planesSiembra, stockGranos] = await Promise.all([
       dbGetAll("lotes"),
@@ -130,15 +128,6 @@ const cargaGranosView = {
     }
 
     const campaniaActiva = campanias.find((c) => c.activa) || null;
-    if (this.state.campaniaFiltro === null) {
-      this.state.campaniaFiltro = campaniaActiva ? campaniaActiva.id : "";
-    } else if (this.state.campaniaFiltro && !campanias.some((c) => c.id === this.state.campaniaFiltro)) {
-      // La campaña que se estaba filtrando ya no existe (se borró en Maestros,
-      // ej. una duplicada mal traída) — el <select> vuelve a mostrar "Todas"
-      // por defecto al no encontrar ninguna opción "selected", pero el filtro
-      // seguía usando ese id viejo y mostraba 0 resultados sin explicación.
-      this.state.campaniaFiltro = "";
-    }
 
     container.innerHTML = `
       <h2>Carga de Granos de Campo</h2>
@@ -509,50 +498,25 @@ const cargaGranosView = {
       this.render(container);
     });
 
-    await renderListadoCargas(container, campanias, this.state, campaniaActiva);
+    await renderListadoCargas(container, campaniaActiva);
   },
 };
 
-async function renderListadoCargas(container, campanias, state, campaniaActiva) {
+async function renderListadoCargas(container, campaniaActiva) {
   const lista = container.querySelector("#listaCargas");
   const todasLasCargas = (await dbGetAll(STORE)).sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""));
-  // Las cargas viejas, de antes de que existiera el concepto de Campaña, no
-  // tienen campaniaId — se las trata como pertenecientes a la campaña activa,
-  // así no "desaparecen" del filtro por defecto en ningún dispositivo.
-  const campaniaDe = (c) => c.campaniaId || (campaniaActiva ? campaniaActiva.id : "");
-  const cargas = state.campaniaFiltro
-    ? todasLasCargas.filter((c) => campaniaDe(c) === state.campaniaFiltro)
-    : todasLasCargas;
-
-  const filtroHtml = `
-    <div class="field" style="margin-bottom:10px;">
-      <label style="font-size:0.8rem;">Ver campaña</label>
-      <select id="fFiltroCampania" style="padding:6px 8px; font-size:0.9rem;">
-        <option value="">Todas</option>
-        ${campanias
-          .slice()
-          .sort((a, b) => b.nombre.localeCompare(a.nombre))
-          .map((c) => `<option value="${c.id}" ${state.campaniaFiltro === c.id ? "selected" : ""}>${c.nombre}${c.activa ? " (activa)" : ""}</option>`)
-          .join("")}
-      </select>
-    </div>
-  `;
 
   if (todasLasCargas.length === 0) {
     lista.innerHTML = `<h2 style="margin-top:0;">Últimas cargas</h2><div class="empty-state">Todavía no registraste cargas.</div>`;
     return;
   }
 
-  lista.innerHTML = `<h2 style="margin-top:0;">Últimas cargas</h2>${filtroHtml}`;
-  lista.querySelector("#fFiltroCampania").addEventListener("change", (e) => {
-    state.campaniaFiltro = e.target.value;
-    renderListadoCargas(container, campanias, state, campaniaActiva);
-  });
+  // Se muestran las 10 más recientes de todas las campañas (sin filtro) —
+  // evita depender de un estado de filtro que podía apuntar a una campaña
+  // ya borrada y ocultar cargas reales sin ninguna explicación.
+  const cargas = todasLasCargas.slice(0, 10);
+  lista.innerHTML = `<h2 style="margin-top:0;">Últimas cargas (10 más recientes)</h2>`;
 
-  if (cargas.length === 0) {
-    lista.innerHTML += '<div class="empty-state">No hay cargas registradas en esta campaña.</div>';
-    return;
-  }
   for (const c of cargas) {
     const row = document.createElement("div");
     row.className = "list-item";
@@ -562,6 +526,7 @@ async function renderListadoCargas(container, campanias, state, campaniaActiva) 
       ? `<strong>${c.origenNombre}</strong> (${c.origenTipo === "silo" ? "Silo Bolsa" : "Lote"}) + <strong>${c.origen2Nombre}</strong> (${c.origen2Tipo === "silo" ? "Silo Bolsa" : "Lote"})`
       : `<strong>${c.origenNombre}</strong> (${c.origenTipo === "silo" ? "Silo Bolsa" : "Lote"})`;
     const kgTxt = c.origen2Nombre ? `${c.kgNeto} kg netos (${kgOrigen1} + ${kgOrigen2})` : `${c.kgNeto} kg netos`;
+    const campaniaTxt = c.campaniaNombre || (campaniaActiva ? campaniaActiva.nombre : "sin campaña");
     const fotoTxt = c.fotoUrl
       ? ` · <a href="${c.fotoUrl}" target="_blank" rel="noopener">Ver foto</a>`
       : c.foto
@@ -570,7 +535,7 @@ async function renderListadoCargas(container, campanias, state, campaniaActiva) 
     row.innerHTML = `
       <div>
         <div>${origenTxt} → ${c.corredorNombre}</div>
-        <div class="muted">${c.fecha?.replace("T", " ")} · ${c.cultivo} · ${kgTxt}${fotoTxt}</div>
+        <div class="muted">${c.fecha?.replace("T", " ")} · Campaña ${campaniaTxt} · ${c.cultivo} · ${kgTxt}${fotoTxt}</div>
       </div>
       <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
         <span class="pill ${c.sincronizado ? "sincronizado" : "pendiente"}">${c.sincronizado ? "Sincronizado" : "Pendiente"}</span>
@@ -580,7 +545,7 @@ async function renderListadoCargas(container, campanias, state, campaniaActiva) 
     row.querySelector("button").addEventListener("click", async () => {
       if (confirm("¿Borrar este registro?")) {
         await dbDelete(STORE, c.id);
-        renderListadoCargas(container, campanias, state, campaniaActiva);
+        renderListadoCargas(container, campaniaActiva);
       }
     });
     lista.appendChild(row);
