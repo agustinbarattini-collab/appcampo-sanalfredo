@@ -69,10 +69,19 @@ async function updateSyncStatus() {
 
 async function runSync() {
   await syncAll();
-  await pullAll();
-  // Trae Lotes/Silos/Corredores/etc. de la Sheet sin depender de que alguien
-  // toque "Actualizar desde Sheets" a mano en Maestros.
+  // Los maestros (Lotes/Silos/Corredores/etc.) se traen ANTES que pullAll():
+  // al traer una Carga de Granos, su origen se resuelve por NOMBRE contra los
+  // maestros locales (resolverIdPorNombre en sync.js) y, si no encuentra
+  // ninguno, crea uno "cascarón" vacío (sin cultivo, sin campaña) para no
+  // perder la referencia. En un dispositivo recién reseteado, si pullAll()
+  // corriera primero, esos cascarones se crean ANTES de que lleguen los
+  // maestros reales — y con Silos Bolsa (donde ahora el cultivo/campaña
+  // importan para no confundir pools) ese cascarón podía terminar como un
+  // duplicado suelto, sin ninguna carga apuntándolo. Trayendo los maestros
+  // primero, pullAll() ya encuentra el maestro real y no hace falta ningún
+  // cascarón.
   await importarMaestros();
+  await pullAll();
   await updateSyncStatus();
   // Refresca la vista actual por si trajo datos nuevos de otros dispositivos.
   await router();

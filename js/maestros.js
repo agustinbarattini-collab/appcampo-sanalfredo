@@ -94,7 +94,7 @@ const silosBolsaView = {
       row.innerHTML = `
         <div>
           <div><strong>${s.nombre}</strong> ${s.finalizado ? '<span class="pill sincronizado">Finalizado</span>' : ""}</div>
-          <div class="muted">${s.cultivo ? s.cultivo + " · " : ""}${s.kgResidual} kg restantes de ${s.kgTotalInicial} kg${s.cantidadMiembros > 1 ? ` (suma de ${s.cantidadMiembros} filas con este nombre)` : ""}</div>
+          <div class="muted">${s.cultivo ? s.cultivo + " · " : ""}${s.campaniaNombre ? "Campaña " + s.campaniaNombre + " · " : ""}${s.kgResidual} kg restantes de ${s.kgTotalInicial} kg${s.cantidadMiembros > 1 ? ` (suma de ${s.cantidadMiembros} filas con este nombre)` : ""}</div>
         </div>
         ${s.finalizado ? '<button class="secondary" data-accion="reactivar" data-id="' + s.id + '">Reactivar</button>' : ""}
       `;

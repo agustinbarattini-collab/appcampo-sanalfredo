@@ -1,15 +1,17 @@
 import { dbGetAll } from "./db.js";
 
-// Agrupa los maestros de Silo Bolsa por nombre+cultivo: puede haber más de
-// uno con el mismo nombre (ej. varios bolsones que en el campo se llaman
-// igual, cargados como filas separadas en la Sheet) — se tratan como un solo
-// pool, sumando sus kg iniciales y su consumo, para que el stock y las
-// diferencias al finalizar se calculen contra el total real, no contra una
-// sola de las filas.
+// Agrupa los maestros de Silo Bolsa por nombre+cultivo+campaña: puede haber
+// más de uno con el mismo nombre (ej. varios bolsones que en el campo se
+// llaman igual, cargados como filas separadas en la Sheet) — se tratan como
+// un solo pool, sumando sus kg iniciales y su consumo, para que el stock y
+// las diferencias al finalizar se calculen contra el total real, no contra
+// una sola de las filas. La campaña entra en la clave para que un silo nuevo
+// (ej. "Bolsa 1" de la campaña que arranca) no se mezcle sin querer con uno
+// viejo que comparte nombre+cultivo pero es de otra campaña.
 function agruparSilosPorNombreCultivo(silos) {
   const grupos = new Map();
   for (const s of silos) {
-    const key = s.nombre.trim().toLowerCase() + "|" + (s.cultivo || "").trim().toLowerCase();
+    const key = s.nombre.trim().toLowerCase() + "|" + (s.cultivo || "").trim().toLowerCase() + "|" + (s.campaniaId || "");
     if (!grupos.has(key)) grupos.set(key, []);
     grupos.get(key).push(s);
   }

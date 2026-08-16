@@ -154,13 +154,15 @@ async function syncAll(onProgress) {
 // nada local, solo agregan/actualizan por nombre (o loteNombre+cultivo en Plan).
 // ---------------------------------------------------------------------------
 
+// Silos Bolsa se maneja aparte (ver más abajo, junto con Plan de Siembra):
+// necesita resolver la campaña por nombre a un campaniaId local, algo que
+// este loop genérico (upsert simple por "nombre") no hace.
 const MAESTROS_CAMPOS = {
   lotes: ["nombre", "cultivo"],
   corredores: ["nombre"],
   proveedores: ["nombre"],
   contratistas: ["nombre"],
   insumos: ["nombre", "unidad"],
-  silosBolsa: ["nombre", "cultivo", "kgTotalInicial"],
   campanias: ["nombre", "activa"],
 };
 
@@ -212,6 +214,58 @@ async function importarMaestros() {
       else nuevos++;
     }
     resumen[MAESTROS_ETIQUETAS[store]] = { nuevos, actualizados };
+  }
+
+  // Silos Bolsa: clave compuesta (nombre + cultivo + campaña), no un "nombre"
+  // único — así un silo nuevo de la campaña que arranca no se confunde con
+  // uno viejo que comparte nombre+cultivo de otra campaña (mismo criterio de
+  // agrupamiento que agruparSilosPorNombreCultivo en stockUtils.js).
+  {
+    const filas = data.maestros.silosBolsa || [];
+    const existentes = await dbGetAll("silosBolsa");
+    let nuevos = 0;
+    let actualizados = 0;
+    for (const fila of filas) {
+      const nombre = String(fila.nombre || "").trim();
+      if (!nombre) continue;
+      const cultivo = String(fila.cultivo || "").trim();
+      const campaniaNombre = String(fila.campaniaNombre || "").trim();
+      const campaniaId = campaniaNombre ? await resolverIdPorNombre("campanias", campaniaNombre, { activa: false }) : null;
+      const mismoNombre = (s) => s.nombre.trim().toLowerCase() === nombre.toLowerCase();
+      const mismoNombreCultivo = (s) => mismoNombre(s) && (s.cultivo || "").trim().toLowerCase() === cultivo.toLowerCase();
+      // Un registro "cascarón" es uno creado por resolverIdPorNombre() al
+      // traer una Carga de Granos que referencia un silo por nombre que
+      // todavía no existía localmente (ej. en un dispositivo recién
+      // reseteado) — nace con cultivo vacío, sin campaña y kgTotalInicial 0,
+      // como puro marcador para no perder la referencia de esa carga.
+      const esCascaron = (s) => !s.campaniaId && !s.cultivo && !s.kgTotalInicial;
+      // 1) Coincidencia exacta por nombre+cultivo+campaña.
+      let existente = existentes.find((s) => mismoNombreCultivo(s) && (s.campaniaId || null) === campaniaId);
+      // 2) Si no hay exacta, puede ser un silo YA CARGADO en el dispositivo
+      // de antes de que existiera esta columna (sin campaniaId todavía) al
+      // que recién ahora se le asignó campaña en la Sheet — se actualiza ESE
+      // registro en el lugar (conserva su id, y con él todo el historial de
+      // cargas que ya lo tenían como origen) en vez de crear uno nuevo vacío.
+      if (!existente) {
+        existente = existentes.find((s) => mismoNombreCultivo(s) && !s.campaniaId);
+      }
+      // 3) Si tampoco hay eso, puede ser un cascarón (ver esCascaron arriba)
+      // — el cultivo de este import es la primera info real que recibe, así
+      // que se lo adopta por NOMBRE solo (el cultivo vacío del cascarón no
+      // tiene por qué coincidir con el real).
+      if (!existente) {
+        existente = existentes.find((s) => mismoNombre(s) && esCascaron(s));
+      }
+      const record = existente ? { ...existente } : { id: uid(), nombre };
+      record.cultivo = cultivo;
+      record.campaniaId = campaniaId;
+      record.campaniaNombre = campaniaNombre;
+      record.kgTotalInicial = parseFloat(fila.kgTotalInicial) || 0;
+      await dbPut("silosBolsa", record);
+      if (existente) actualizados++;
+      else nuevos++;
+    }
+    resumen[MAESTROS_ETIQUETAS.silosBolsa] = { nuevos, actualizados };
   }
 
   // Plan de Siembra: clave compuesta (loteNombre + cultivo + campañaNombre), no un "nombre" único.
@@ -479,11 +533,15 @@ async function unflattenCierre(fila) {
 }
 
 async function unflattenAjusteSiloBolsa(fila) {
+  const campaniaNombre = String(fila.campaniaNombre || "").trim();
+  const campaniaId = campaniaNombre ? await resolverIdPorNombre("campanias", campaniaNombre, { activa: false }) : null;
   return {
     id: fila.id,
     fecha: fila.fecha,
     siloBolsaNombre: String(fila.siloBolsaNombre || "").trim(),
     cultivo: fila.cultivo || "",
+    campaniaId,
+    campaniaNombre,
     kgTotalInicial: parseFloat(fila.kgTotalInicial) || 0,
     kgTotalRetirado: parseFloat(fila.kgTotalRetirado) || 0,
     diferenciaKg: parseFloat(fila.diferenciaKg) || 0,

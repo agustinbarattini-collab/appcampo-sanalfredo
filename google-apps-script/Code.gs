@@ -21,22 +21,22 @@ const CARPETA_DRIVE_PADRE_ID = "";
 const SHEETS = {
   cargaGranos: {
     name: "Carga de Granos",
+    // Reordenado el 2026-08-15 para que se lea de corrido: identificación,
+    // campaña, origen 1 (tipo+nombre+kg), origen 2 (tipo+nombre+kg), total,
+    // datos del viaje, y al final lo más técnico (gps, bruto/tara sin usar
+    // en esta empresa, timestamps de sistema). Como esto reordena columnas
+    // que ya tenían datos cargados, correr migrarOrdenColumnasCargaGranos()
+    // UNA vez (ver más abajo) para reacomodar las filas existentes sin
+    // perder nada — no alcanza con pegar este archivo y ya está.
     headers: [
-      "id", "fecha", "origenTipo", "origenNombre", "cultivo", "ctg", "chofer", "patente",
-      "corredorNombre", "kgBrutos", "tara", "kgNeto", "humedad", "gpsLat", "gpsLng",
-      "observaciones", "fechaCreacionRegistro", "fechaSincronizacion",
-      // Agregados después (van al final para no correr de lugar los datos ya cargados
-      // en planillas existentes): segundo origen opcional, para cuando el camión se
-      // carga de 2 bolsas o 2 lotes en el mismo viaje.
+      "id", "fecha", "campaniaNombre",
+      "origenTipo", "origenNombre", "kgOrigen1",
       "origen2Tipo", "origen2Nombre", "kgOrigen2",
-      // Va al final por el mismo motivo: no correr de lugar los datos ya cargados.
-      "campaniaNombre",
-      // La foto del ticket/báscula, si se sacó una (ver guardarFotoEnDrive).
-      "fotoUrl",
-      // Kg netos del 1er origen, explícito (antes solo se guardaba el total
-      // en "kgNeto" y kgOrigen2 del 2do origen, sin ninguna columna para el
-      // 1ro — quedaba implícito y no se podía ver en la planilla).
-      "kgOrigen1",
+      "kgNeto",
+      "cultivo", "ctg", "chofer", "patente", "corredorNombre", "humedad",
+      "observaciones", "fotoUrl",
+      "gpsLat", "gpsLng", "kgBrutos", "tara",
+      "fechaCreacionRegistro", "fechaSincronizacion",
     ],
   },
   movimientoInsumo: {
@@ -86,6 +86,9 @@ const SHEETS = {
     headers: [
       "id", "fecha", "siloBolsaNombre", "cultivo", "kgTotalInicial", "kgTotalRetirado",
       "diferenciaKg", "tipoDiferencia", "observaciones", "fechaCreacionRegistro", "fechaSincronizacion",
+      // Va al final para no correr de lugar los datos ya cargados: campaña del
+      // silo bolsa que se finalizó (heredada del maestro, no se elige a mano).
+      "campaniaNombre",
     ],
   },
   ordenTrabajo: {
@@ -108,7 +111,14 @@ const SHEETS = {
 // sin tipearlos a mano.
 const MAESTROS_SHEETS = {
   lotes: { name: "Maestros - Lotes", headers: ["nombre", "cultivo"] },
-  silosBolsa: { name: "Maestros - Silos Bolsa", headers: ["nombre", "cultivo", "kgTotalInicial"] },
+  // campaniaNombre agregado al final (2026-08-15): a qué campaña pertenece
+  // cada silo bolsa, para poder generar métricas por campaña más adelante y
+  // para que dos silos con el mismo nombre+cultivo de campañas distintas no
+  // se traten como el mismo pool de stock (ver agruparSilosPorNombreCultivo
+  // en stockUtils.js). Completar a mano por fila, igual que las demás
+  // columnas de este maestro — no hace falta que coincida con ninguna
+  // campaña "activa" en particular, es la campaña en la que se armó ESE silo.
+  silosBolsa: { name: "Maestros - Silos Bolsa", headers: ["nombre", "cultivo", "kgTotalInicial", "campaniaNombre"] },
   corredores: { name: "Maestros - Corredores", headers: ["nombre"] },
   insumos: { name: "Maestros - Insumos", headers: ["nombre", "unidad"] },
   proveedores: { name: "Maestros - Proveedores", headers: ["nombre"] },
@@ -135,6 +145,50 @@ function setup() {
     const s = ss.getSheetByName(n);
     if (s && ss.getSheets().length > 1) ss.deleteSheet(s);
   });
+  aplicarValidacionCampanias();
+}
+
+/**
+ * Convierte la columna "campaniaNombre" de Silos Bolsa y Plan de Siembra en
+ * una lista desplegable con los nombres que hoy existen en "Maestros -
+ * Campañas", en vez de texto libre. Así se evita el problema real que ya
+ * pasó una vez (una campaña "2025/26" con barra, escrita a mano, terminó
+ * creando una campaña fantasma separada de la "2025-26" real con guion) —
+ * ahora solo se puede elegir un nombre que YA existe, no tipear uno nuevo
+ * por error. Se corre sola al final de setup(), así que se mantiene
+ * actualizada cada vez que se agrega/renombra una campaña y se vuelve a
+ * correr setup() (idempotente, no rompe nada si se corre de más). Si
+ * "Maestros - Campañas" todavía no tiene ninguna fila cargada, no hace nada
+ * (evita dejar una lista vacía que bloquee cualquier valor).
+ */
+function aplicarValidacionCampanias() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const hojaCampanias = ss.getSheetByName(MAESTROS_SHEETS.campanias.name);
+  if (!hojaCampanias) return;
+  const lastRow = hojaCampanias.getLastRow();
+  if (lastRow < 2) return;
+
+  const nombres = hojaCampanias
+    .getRange(2, 1, lastRow - 1, 1)
+    .getValues()
+    .map(function (r) { return String(r[0]).trim(); })
+    .filter(function (n) { return n !== ""; });
+  if (nombres.length === 0) return;
+
+  const regla = SpreadsheetApp.newDataValidation()
+    .requireValueInList(nombres, true)
+    .setAllowInvalid(false)
+    .build();
+
+  [MAESTROS_SHEETS.silosBolsa, MAESTROS_SHEETS.planSiembra].forEach(function (cfg) {
+    const hoja = ss.getSheetByName(cfg.name);
+    if (!hoja) return;
+    const col = cfg.headers.indexOf("campaniaNombre") + 1;
+    if (col < 1) return;
+    // Rango amplio (499 filas) para cubrir filas que se agreguen después,
+    // sin tener que correr esto de nuevo cada vez que se suma una carga.
+    hoja.getRange(2, col, 499, 1).setDataValidation(regla);
+  });
 }
 
 function crearPestana(ss, cfg) {
@@ -142,6 +196,89 @@ function crearPestana(ss, cfg) {
   if (!sheet) sheet = ss.insertSheet(cfg.name);
   sheet.getRange(1, 1, 1, cfg.headers.length).setValues([cfg.headers]);
   sheet.setFrozenRows(1);
+}
+
+/**
+ * Correr esta función UNA sola vez desde el editor (▶) después de pegar un
+ * cambio que reordena SHEETS.cargaGranos.headers, para reacomodar las filas
+ * YA CARGADAS al orden nuevo sin perder ni desalinear ningún dato. Lee cada
+ * fila existente usando el encabezado REAL que hoy tiene la fila 1 de la
+ * planilla (no un orden fijo pegado en el código), la reconstruye por
+ * nombre de columna, y reescribe toda la pestaña con el orden nuevo.
+ * Segura de correr de más: si la fila 1 ya está en el orden nuevo, no hace
+ * nada (evita reinterpretar datos ya migrados con el header viejo).
+ */
+function migrarOrdenColumnasCargaGranos() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEETS.cargaGranos.name);
+  if (!sheet) {
+    Logger.log('No existe la pestaña "' + SHEETS.cargaGranos.name + '".');
+    return;
+  }
+  const headerActual = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const nuevoOrden = SHEETS.cargaGranos.headers;
+  if (JSON.stringify(headerActual) === JSON.stringify(nuevoOrden)) {
+    Logger.log("Ya está en el orden nuevo, no hace falta correr esto de nuevo.");
+    return;
+  }
+  const lastRow = sheet.getLastRow();
+  const filasViejas = lastRow >= 2
+    ? sheet.getRange(2, 1, lastRow - 1, headerActual.length).getValues()
+    : [];
+  const filasNuevas = filasViejas.map(function (fila) {
+    const obj = {};
+    headerActual.forEach(function (h, i) { obj[h] = fila[i]; });
+    return nuevoOrden.map(function (h) { return obj[h] !== undefined ? obj[h] : ""; });
+  });
+  sheet.clearContents();
+  sheet.getRange(1, 1, 1, nuevoOrden.length).setValues([nuevoOrden]);
+  if (filasNuevas.length > 0) {
+    sheet.getRange(2, 1, filasNuevas.length, nuevoOrden.length).setValues(filasNuevas);
+  }
+  sheet.setFrozenRows(1);
+  Logger.log("Migradas " + filasNuevas.length + " filas al orden nuevo.");
+}
+
+/**
+ * Correr esta función UNA vez desde el editor (▶) para completar "kgOrigen1"
+ * en las filas viejas que quedaron vacías ahí — son cargas hechas ANTES de
+ * que el backend tuviera esa columna, así que el dato nunca se guardó (el
+ * cliente ya lo mandaba, pero el Code.gs viejo lo ignoraba). Se puede
+ * reconstruir sin ambigüedad porque kgNeto siempre es kgOrigen1+kgOrigen2:
+ * kgOrigen1 = kgNeto - kgOrigen2 (con kgOrigen2 en 0 para cargas de un solo
+ * origen, da el total completo). Solo toca filas con kgOrigen1 vacío — no
+ * pisa ningún valor ya cargado por una sincronización posterior a este fix.
+ */
+function backfillKgOrigen1CargaGranos() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEETS.cargaGranos.name);
+  if (!sheet) {
+    Logger.log('No existe la pestaña "' + SHEETS.cargaGranos.name + '".');
+    return;
+  }
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const colKgOrigen1 = headers.indexOf("kgOrigen1");
+  const colKgOrigen2 = headers.indexOf("kgOrigen2");
+  const colKgNeto = headers.indexOf("kgNeto");
+  if (colKgOrigen1 === -1 || colKgOrigen2 === -1 || colKgNeto === -1) {
+    Logger.log("Faltan columnas kgOrigen1/kgOrigen2/kgNeto en la fila 1 — no se puede completar.");
+    return;
+  }
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+  const rango = sheet.getRange(2, 1, lastRow - 1, headers.length);
+  const filas = rango.getValues();
+  let completadas = 0;
+  filas.forEach(function (fila) {
+    if (fila[colKgOrigen1] === "" || fila[colKgOrigen1] === null) {
+      const kgNeto = parseFloat(fila[colKgNeto]) || 0;
+      const kgOrigen2 = parseFloat(fila[colKgOrigen2]) || 0;
+      fila[colKgOrigen1] = kgNeto - kgOrigen2;
+      completadas++;
+    }
+  });
+  rango.setValues(filas);
+  Logger.log("Completadas " + completadas + " filas con kgOrigen1 calculado (kgNeto - kgOrigen2).");
 }
 
 /**

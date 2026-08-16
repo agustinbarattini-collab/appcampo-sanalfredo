@@ -23,7 +23,7 @@ async function poblarOrigenSelect(select, tipo) {
       .filter((s) => s.kgResidual > 0)
       .sort((a, b) => a.nombre.localeCompare(b.nombre));
     for (const s of silos) {
-      select.innerHTML += `<option value="${s.id}">${s.nombre} — ${s.kgResidual} kg restantes${s.cultivo ? ` (${s.cultivo})` : ""}</option>`;
+      select.innerHTML += `<option value="${s.id}">${s.nombre}${s.campaniaNombre ? ` (${s.campaniaNombre})` : ""} — ${s.kgResidual} kg restantes${s.cultivo ? ` (${s.cultivo})` : ""}</option>`;
     }
   }
 }
@@ -76,6 +76,8 @@ async function finalizarSiloBolsa(siloId, kgResidualAntes, kgEsteViaje, fechaCar
     fecha: fechaCarga,
     siloBolsaNombre: silo.nombre,
     cultivo: silo.cultivo || "",
+    campaniaId: silo.campaniaId || null,
+    campaniaNombre: silo.campaniaNombre || "",
     kgTotalInicial: kgTotalInicialGrupo,
     kgTotalRetirado: Math.round((kgTotalInicialGrupo + diferenciaKg) * 100) / 100,
     diferenciaKg,
