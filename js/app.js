@@ -24,6 +24,7 @@ const ROLES = {
   granos: { rutas: ["carga", "maestros"] },
   siembra: { rutas: ["siembra", "maestros"] },
   fitoinsumos: { rutas: ["insumos", "fitosanitarios", "maestros"] },
+  contratistas: { rutas: ["insumos", "fitosanitarios", "ordenes", "maestros"] },
 };
 const ROL_STORAGE_KEY = "appcampo_rol";
 
