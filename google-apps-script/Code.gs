@@ -93,15 +93,25 @@ const SHEETS = {
   },
   ordenTrabajo: {
     name: "Órdenes de Trabajo",
+    // La carga esta pensada para el asesor, directo en esta pestaña (no hay
+    // formulario de alta en la app — Órdenes de Trabajo pasó a ser de solo
+    // lectura para los contratistas, 2026-08-17). Cada producto ahora es
+    // dosis por hectárea, no cantidad total fija — la app calcula la
+    // necesidad total multiplicando por "has". Reordenado 2026-08-17 para
+    // que se cargue de corrido (nombre, contratista, lotes, has, fechas,
+    // productos) y con "has" pegado a "lotesNombres" para completarlo más
+    // fácil; "id" y las fechas de sistema van al final — no hace falta
+    // tocarlas nunca, se llenan solas (ver aplicarValidacionOrdenesTrabajo,
+    // que además las pinta de gris y arma los desplegables validados).
     headers: [
-      "id", "nombre", "contratistaNombre", "lotesNombres", "fechaAsignacion", "fechaLimite",
-      "producto1Nombre", "producto1Cantidad", "producto1Unidad",
-      "producto2Nombre", "producto2Cantidad", "producto2Unidad",
-      "producto3Nombre", "producto3Cantidad", "producto3Unidad",
-      "producto4Nombre", "producto4Cantidad", "producto4Unidad",
-      "producto5Nombre", "producto5Cantidad", "producto5Unidad",
-      "producto6Nombre", "producto6Cantidad", "producto6Unidad",
-      "observaciones", "fechaCreacion", "fechaCreacionRegistro", "fechaSincronizacion",
+      "nombre", "contratistaNombre", "lotesNombres", "has", "fechaAsignacion", "fechaLimite",
+      "producto1Nombre", "producto1DosisPorHa", "producto1Unidad",
+      "producto2Nombre", "producto2DosisPorHa", "producto2Unidad",
+      "producto3Nombre", "producto3DosisPorHa", "producto3Unidad",
+      "producto4Nombre", "producto4DosisPorHa", "producto4Unidad",
+      "producto5Nombre", "producto5DosisPorHa", "producto5Unidad",
+      "producto6Nombre", "producto6DosisPorHa", "producto6Unidad",
+      "observaciones", "id", "fechaCreacion", "fechaCreacionRegistro", "fechaSincronizacion",
     ],
   },
 };
@@ -146,6 +156,106 @@ function setup() {
     if (s && ss.getSheets().length > 1) ss.deleteSheet(s);
   });
   aplicarValidacionCampanias();
+  aplicarValidacionOrdenesTrabajo();
+}
+
+/**
+ * Lee la columna A (a partir de la fila 2) de una pestaña de maestro y
+ * devuelve los nombres no vacíos — helper chico para armar listas de
+ * desplegables sin repetir el mismo getRange/getValues/filter cada vez.
+ */
+function nombresDeMaestro(nombrePestana) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const hoja = ss.getSheetByName(nombrePestana);
+  if (!hoja) return [];
+  const lastRow = hoja.getLastRow();
+  if (lastRow < 2) return [];
+  return hoja
+    .getRange(2, 1, lastRow - 1, 1)
+    .getValues()
+    .map(function (r) { return String(r[0]).trim(); })
+    .filter(function (n) { return n !== ""; });
+}
+
+/**
+ * Arma los desplegables validados de "Órdenes de Trabajo" (contratista,
+ * lotes, cada producto y su unidad) contra los maestros correspondientes, y
+ * pinta de gris las columnas que llena el sistema (id y las 3 fechas de
+ * sincronización) para que se note a simple vista que no hay que tocarlas.
+ * Se corre sola al final de setup() — si algún maestro todavía no tiene
+ * filas cargadas, esa validación puntual se salta (no deja una lista vacía
+ * que bloquee todo).
+ */
+function aplicarValidacionOrdenesTrabajo() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const hoja = ss.getSheetByName(SHEETS.ordenTrabajo.name);
+  if (!hoja) return;
+  const headers = SHEETS.ordenTrabajo.headers;
+  const FILAS = 499;
+
+  function colDe(campo) {
+    return headers.indexOf(campo) + 1;
+  }
+
+  // Contratista: desplegable estricto (un solo contratista por orden).
+  const contratistas = nombresDeMaestro(MAESTROS_SHEETS.contratistas.name);
+  if (contratistas.length > 0) {
+    const regla = SpreadsheetApp.newDataValidation().requireValueInList(contratistas, true).setAllowInvalid(false).build();
+    const col = colDe("contratistaNombre");
+    if (col > 0) hoja.getRange(2, col, FILAS, 1).setDataValidation(regla);
+  }
+
+  // Lotes: desplegable SUGERIDO, no estricto — una orden puede tener varios
+  // lotes separados por coma en la misma celda, y una validación estricta
+  // rechazaría eso. Ayuda a elegir el nombre exacto sin tipeo cuando es un
+  // solo lote, pero deja escribir una lista igual.
+  const lotes = nombresDeMaestro(MAESTROS_SHEETS.lotes.name);
+  if (lotes.length > 0) {
+    const regla = SpreadsheetApp.newDataValidation().requireValueInList(lotes, true).setAllowInvalid(true).build();
+    const col = colDe("lotesNombres");
+    if (col > 0) hoja.getRange(2, col, FILAS, 1).setDataValidation(regla);
+  }
+
+  // Productos: desplegable estricto contra Maestros - Insumos, uno por cada
+  // una de las 6 filas de producto posibles.
+  const insumos = nombresDeMaestro(MAESTROS_SHEETS.insumos.name);
+  if (insumos.length > 0) {
+    const reglaProducto = SpreadsheetApp.newDataValidation().requireValueInList(insumos, true).setAllowInvalid(false).build();
+    for (let i = 1; i <= 6; i++) {
+      const col = colDe("producto" + i + "Nombre");
+      if (col > 0) hoja.getRange(2, col, FILAS, 1).setDataValidation(reglaProducto);
+    }
+  }
+
+  // Unidad: desplegable estricto con las unidades que ya existen en
+  // Maestros - Insumos (ej. Kg, Lts, Bls) — evita variantes tipo "kg"/"Kg."
+  // que después no coincidan al comparar contra el insumo real.
+  const ssInsumos = ss.getSheetByName(MAESTROS_SHEETS.insumos.name);
+  if (ssInsumos) {
+    const lastRow = ssInsumos.getLastRow();
+    const unidadesSet = {};
+    if (lastRow >= 2) {
+      ssInsumos.getRange(2, 1, lastRow - 1, 2).getValues().forEach(function (fila) {
+        const u = String(fila[1] || "").trim();
+        if (u) unidadesSet[u] = true;
+      });
+    }
+    const unidades = Object.keys(unidadesSet);
+    if (unidades.length > 0) {
+      const reglaUnidad = SpreadsheetApp.newDataValidation().requireValueInList(unidades, true).setAllowInvalid(false).build();
+      for (let i = 1; i <= 6; i++) {
+        const col = colDe("producto" + i + "Unidad");
+        if (col > 0) hoja.getRange(2, col, FILAS, 1).setDataValidation(reglaUnidad);
+      }
+    }
+  }
+
+  // Columnas que llena el sistema, no el asesor — se pintan de gris para
+  // que se note a simple vista que no hay que tocarlas.
+  ["id", "fechaCreacion", "fechaCreacionRegistro", "fechaSincronizacion"].forEach(function (campo) {
+    const col = colDe(campo);
+    if (col > 0) hoja.getRange(1, col, 500, 1).setBackground("#e8e8e8");
+  });
 }
 
 /**
@@ -199,24 +309,24 @@ function crearPestana(ss, cfg) {
 }
 
 /**
- * Correr esta función UNA sola vez desde el editor (▶) después de pegar un
- * cambio que reordena SHEETS.cargaGranos.headers, para reacomodar las filas
- * YA CARGADAS al orden nuevo sin perder ni desalinear ningún dato. Lee cada
- * fila existente usando el encabezado REAL que hoy tiene la fila 1 de la
- * planilla (no un orden fijo pegado en el código), la reconstruye por
- * nombre de columna, y reescribe toda la pestaña con el orden nuevo.
- * Segura de correr de más: si la fila 1 ya está en el orden nuevo, no hace
- * nada (evita reinterpretar datos ya migrados con el header viejo).
+ * Reacomoda las filas YA CARGADAS de una pestaña al orden nuevo de
+ * sheetCfg.headers, sin perder ni desalinear ningún dato — lee cada fila
+ * usando el encabezado REAL que hoy tiene la fila 1 (no un orden fijo
+ * pegado en el código), la reconstruye por nombre de columna, y reescribe
+ * toda la pestaña con el orden nuevo. Segura de correr de más: si la fila 1
+ * ya está en el orden nuevo, no hace nada. No se llama directo — usar los
+ * wrappers de abajo (uno por pestaña) para poder elegirlos por nombre en el
+ * desplegable de funciones del editor (▶).
  */
-function migrarOrdenColumnasCargaGranos() {
+function migrarOrdenColumnas(sheetCfg) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(SHEETS.cargaGranos.name);
+  const sheet = ss.getSheetByName(sheetCfg.name);
   if (!sheet) {
-    Logger.log('No existe la pestaña "' + SHEETS.cargaGranos.name + '".');
+    Logger.log('No existe la pestaña "' + sheetCfg.name + '".');
     return;
   }
   const headerActual = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  const nuevoOrden = SHEETS.cargaGranos.headers;
+  const nuevoOrden = sheetCfg.headers;
   if (JSON.stringify(headerActual) === JSON.stringify(nuevoOrden)) {
     Logger.log("Ya está en el orden nuevo, no hace falta correr esto de nuevo.");
     return;
@@ -236,7 +346,33 @@ function migrarOrdenColumnasCargaGranos() {
     sheet.getRange(2, 1, filasNuevas.length, nuevoOrden.length).setValues(filasNuevas);
   }
   sheet.setFrozenRows(1);
-  Logger.log("Migradas " + filasNuevas.length + " filas al orden nuevo.");
+  Logger.log("Migradas " + filasNuevas.length + " filas al orden nuevo en \"" + sheetCfg.name + "\".");
+}
+
+/**
+ * Correr esta función UNA sola vez desde el editor (▶) después de pegar un
+ * cambio que reordena SHEETS.cargaGranos.headers, para reacomodar las filas
+ * YA CARGADAS al orden nuevo sin perder ni desalinear ningún dato. Lee cada
+ * fila existente usando el encabezado REAL que hoy tiene la fila 1 de la
+ * planilla (no un orden fijo pegado en el código), la reconstruye por
+ * nombre de columna, y reescribe toda la pestaña con el orden nuevo.
+ * Segura de correr de más: si la fila 1 ya está en el orden nuevo, no hace
+ * nada (evita reinterpretar datos ya migrados con el header viejo).
+ */
+function migrarOrdenColumnasCargaGranos() {
+  migrarOrdenColumnas(SHEETS.cargaGranos);
+}
+
+/**
+ * Mismo criterio que migrarOrdenColumnasCargaGranos(), para "Órdenes de
+ * Trabajo" — correr UNA vez después de pegar el cambio que reordenó sus
+ * columnas (has al lado de lotesNombres, id al final). Nota: como el
+ * producto1Cantidad viejo se renombró a producto1DosisPorHa (son conceptos
+ * distintos, no una cantidad total), esa columna puntual no se migra con
+ * datos viejos — queda vacía para completarla de nuevo con la dosis real.
+ */
+function migrarOrdenColumnasOrdenesTrabajo() {
+  migrarOrdenColumnas(SHEETS.ordenTrabajo);
 }
 
 /**

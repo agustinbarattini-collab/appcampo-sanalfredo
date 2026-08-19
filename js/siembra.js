@@ -1,5 +1,6 @@
 import { dbGetAll, dbPut, dbDelete, uid } from "./db.js";
 import { getAvancePlanes } from "./stockUtils.js";
+import { toast, parseNumero } from "./ui.js";
 
 const STORE_AVANCE = "avanceSiembra";
 const STORE_CIERRE = "cierresSiembra";
@@ -147,7 +148,7 @@ function renderFormPlan(container, formArea, { lotesMaestro, planesConEstado, ca
       </div>
       <div class="field">
         <label>Superficie teórica (ha)</label>
-        <input type="number" step="0.01" id="fSuperficie" required />
+        <input type="text" inputmode="decimal" id="fSuperficie" required />
       </div>
       <button type="submit">Agregar al plan</button>
     </form>
@@ -224,7 +225,7 @@ function renderFormPlan(container, formArea, { lotesMaestro, planesConEstado, ca
       cultivo,
       campaniaId: campania.id,
       campaniaNombre: campania.nombre,
-      superficieTeorica: parseFloat(container.querySelector("#fSuperficie").value) || 0,
+      superficieTeorica: parseNumero(container.querySelector("#fSuperficie").value),
     });
     onSaved();
   });
@@ -247,7 +248,7 @@ function renderFormAvance(container, formArea, { planesAbiertos }, onSaved) {
       </div>
       <div class="field">
         <label>Has sembradas</label>
-        <input type="number" step="0.01" id="fHas" required />
+        <input type="text" inputmode="decimal" id="fHas" required />
       </div>
       <div class="field">
         <label>Comentarios</label>
@@ -275,7 +276,7 @@ function renderFormAvance(container, formArea, { planesAbiertos }, onSaved) {
       cultivo: plan ? plan.cultivo : "",
       campaniaId: plan ? plan.campaniaId : "",
       campaniaNombre: plan ? plan.campaniaNombre : "",
-      hasSembradas: parseFloat(container.querySelector("#fHas").value) || 0,
+      hasSembradas: parseNumero(container.querySelector("#fHas").value),
       comentarios: container.querySelector("#fComentarios").value.trim(),
       marcaCierre: cerrar,
       sincronizado: false,
@@ -311,8 +312,12 @@ function renderFormCierre(container, formArea, { pendientes }, onSaved) {
           tipoSemilla === "kg" || tipoSemilla === "ambos"
             ? `
         <div class="row">
-          <div class="field"><label>Kg de semilla</label><input type="number" step="0.01" class="fSemillaKg" /></div>
           <div class="field"><label>Variedad</label><input type="text" class="fSemillaVariedad" /></div>
+          <div class="field">
+            <label>Kg de semilla (total)</label>
+            <input type="text" inputmode="decimal" class="fSemillaKg" />
+            <div class="muted fPromedioSemillaKg"></div>
+          </div>
         </div>`
             : ""
         }
@@ -320,14 +325,18 @@ function renderFormCierre(container, formArea, { pendientes }, onSaved) {
           tipoSemilla === "bolsas" || tipoSemilla === "ambos"
             ? `
         <div class="row">
-          <div class="field"><label>Bolsas de semilla</label><input type="number" step="0.01" class="fSemillaBolsas" /></div>
           <div class="field"><label>Híbrido</label><input type="text" class="fSemillaHibrido" /></div>
+          <div class="field">
+            <label>Bolsas de semilla (total)</label>
+            <input type="text" inputmode="decimal" class="fSemillaBolsas" />
+            <div class="muted fPromedioSemillaBolsas"></div>
+          </div>
         </div>`
             : ""
         }
         <div class="row">
-          <div class="field"><label>Kg de fertilizante</label><input type="number" step="0.01" class="fFertilizanteKg" /></div>
           <div class="field"><label>Tipo de fertilizante</label><input type="text" class="fFertilizanteTipo" /></div>
+          <div class="field"><label>Kg de fertilizante</label><input type="text" inputmode="decimal" class="fFertilizanteKg" /></div>
         </div>
         <div class="field">
           <label>Observaciones</label>
@@ -339,6 +348,26 @@ function renderFormCierre(container, formArea, { pendientes }, onSaved) {
         </div>
       </form>
     `;
+
+    // Promedio en vivo (kg u bolsas por ha) a medida que se tipea el total,
+    // dividiendo por las has realmente sembradas de este lote — ayuda a
+    // notar un total tipeado de más o de menos antes de guardar.
+    function wirePromedio(inputSel, promedioSel, unidad) {
+      const input = block.querySelector(inputSel);
+      const promedioEl = block.querySelector(promedioSel);
+      if (!input || !promedioEl) return;
+      input.addEventListener("input", () => {
+        const total = parseNumero(input.value);
+        if (!plan.hasSembradas || !total) {
+          promedioEl.textContent = "";
+          return;
+        }
+        const promedio = Math.round((total / plan.hasSembradas) * 100) / 100;
+        promedioEl.textContent = `≈ ${promedio} ${unidad}/ha (sobre ${plan.hasSembradas} ha sembradas)`;
+      });
+    }
+    wirePromedio(".fSemillaKg", ".fPromedioSemillaKg", "kg");
+    wirePromedio(".fSemillaBolsas", ".fPromedioSemillaBolsas", "bolsas");
 
     block.querySelector(".btnCancelar").addEventListener("click", async () => {
       if (!confirm(`¿Cancelar el cierre de "${plan.loteNombre} — ${plan.cultivo}"? El lote vuelve a quedar abierto para cargar avances.`)) return;
@@ -356,7 +385,7 @@ function renderFormCierre(container, formArea, { pendientes }, onSaved) {
         const el = getEl(sel);
         return el ? el.value.trim() : "";
       };
-      const getNum = (sel) => parseFloat(getVal(sel)) || 0;
+      const getNum = (sel) => parseNumero(getVal(sel));
 
       const semillaKg = getNum(".fSemillaKg");
       const semillaBolsas = getNum(".fSemillaBolsas");
@@ -388,6 +417,7 @@ function renderFormCierre(container, formArea, { pendientes }, onSaved) {
       };
       await dbPut(STORE_CIERRE, registro);
       window.dispatchEvent(new Event("appcampo-sync-now"));
+      toast("Cierre registrado.");
       onSaved();
     });
 

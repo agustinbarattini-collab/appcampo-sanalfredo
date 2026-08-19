@@ -1,45 +1,29 @@
-import { dbGetAll, dbPut, dbDelete, uid } from "./db.js";
+import { dbGetAll } from "./db.js";
 import { getOrdenesConEstado } from "./stockUtils.js";
+import { formatearFechaCorta } from "./ui.js";
 
-const STORE = "ordenesTrabajo";
-const NUM_PRODUCTOS = 6;
-
-function today() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function opts(list) {
-  return list
-    .slice()
-    .sort((a, b) => a.nombre.localeCompare(b.nombre))
-    .map((i) => `<option value="${i.id}">${i.nombre}</option>`)
-    .join("");
-}
-
-function etiquetaEstado(o) {
-  if (o.estado === "completada") return { texto: "Completada", clase: "sincronizado" };
-  if (o.estado === "atrasada") return { texto: `Atrasada (${o.diasAtraso} día${o.diasAtraso === 1 ? "" : "s"})`, clase: "pendiente" };
-  return { texto: "Pendiente", clase: "" };
-}
-
+// Órdenes de Trabajo pasó a ser de solo lectura (2026-08-17): las carga el
+// asesor directo en la Sheet ("Órdenes de Trabajo"), no hay alta desde acá.
+// La app solo las muestra, separadas en pendientes/realizadas y ordenadas
+// por fecha de inicio, con un filtro por contratista (mismo criterio que la
+// tarjeta de stock pendiente en Fitosanitarios) para que cada uno vea rápido
+// lo suyo: has, y por producto la dosis/ha cargada por el asesor junto con
+// la necesidad total ya calculada (dosis × has).
 const ordenesTrabajoView = {
+  state: { contratistaId: "" },
+
   async render(container) {
-    const [contratistas, lotes, insumos, ordenes] = await Promise.all([
+    const [contratistas, ordenes] = await Promise.all([
       dbGetAll("contratistas"),
-      dbGetAll("lotes"),
-      dbGetAll("insumos"),
       getOrdenesConEstado(),
     ]);
 
-    if (contratistas.length === 0 || lotes.length === 0) {
-      const faltan = [];
-      if (contratistas.length === 0) faltan.push("Contratistas");
-      if (lotes.length === 0) faltan.push("Lotes");
+    if (ordenes.length === 0) {
       container.innerHTML = `
         <h2>Órdenes de Trabajo</h2>
         <div class="card empty-state">
-          Todavía no cargaste: <strong>${faltan.join(", ")}</strong>.<br/>
-          Andá a Maestros para cargarlos antes de armar una orden.
+          Todavía no hay ninguna Orden de Trabajo cargada en la planilla.<br/>
+          Las carga el asesor directo en la pestaña "Órdenes de Trabajo" de la Sheet — tocá "Actualizar desde Sheets" en Maestros para traerlas.
         </div>`;
       return;
     }
@@ -47,168 +31,130 @@ const ordenesTrabajoView = {
     container.innerHTML = `
       <h2>Órdenes de Trabajo</h2>
       <div class="card">
-        <form id="formOrden">
-          <div class="field">
-            <label>Nombre / N° de orden</label>
-            <input type="text" id="fNombre" placeholder="Ej: OT-045" required />
-          </div>
-          <div class="field">
-            <label>Contratista</label>
-            <select id="fContratista" required><option value="">Seleccionar...</option>${opts(contratistas)}</select>
-          </div>
-          <div class="field">
-            <label>Lotes</label>
-            <div id="lotesCheckboxes" style="display:flex; flex-wrap:wrap; gap:10px;">
-              ${lotes
-                .slice()
-                .sort((a, b) => a.nombre.localeCompare(b.nombre))
-                .map(
-                  (l) => `
-                <label class="checkbox-field" style="width:auto;">
-                  <input type="checkbox" class="fLoteCheck" value="${l.id}" data-nombre="${l.nombre}" /> ${l.nombre}
-                </label>`
-                )
-                .join("")}
-            </div>
-          </div>
-          <div class="row">
-            <div class="field">
-              <label>Fecha de asignación</label>
-              <input type="date" id="fFechaAsignacion" value="${today()}" required />
-            </div>
-            <div class="field">
-              <label>Fecha límite</label>
-              <input type="date" id="fFechaLimite" required />
-            </div>
-          </div>
-          <div class="field">
-            <label>Productos planificados (hasta ${NUM_PRODUCTOS})</label>
-            <div id="productoRows">
-              ${Array.from({ length: NUM_PRODUCTOS })
-                .map(
-                  (_, i) => `
-                <div class="row producto-row">
-                  <select class="fProductoRow"><option value="">Producto ${i + 1}...</option>${opts(insumos)}</select>
-                  <input type="number" step="0.01" class="fCantidadRow" placeholder="Cantidad" />
-                </div>`
-                )
-                .join("")}
-            </div>
-          </div>
-          <div class="field">
-            <label>Observaciones</label>
-            <textarea id="fObs"></textarea>
-          </div>
-          <button type="submit">Crear orden</button>
-        </form>
+        <label style="font-size:0.8rem;">Ver órdenes de</label>
+        <select id="fContratistaFiltro">
+          <option value="">Todos los contratistas</option>
+          ${contratistas
+            .slice()
+            .sort((a, b) => a.nombre.localeCompare(b.nombre))
+            .map((c) => `<option value="${c.id}" ${c.id === this.state.contratistaId ? "selected" : ""}>${c.nombre}</option>`)
+            .join("")}
+        </select>
       </div>
-      <div class="card" id="listaOrdenes"></div>
+      <div class="card" id="listaPendientes"></div>
+      <div class="card" id="listaRealizadas"></div>
     `;
 
-    container.querySelector("#formOrden").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const nombre = container.querySelector("#fNombre").value.trim();
-      const contratistaId = container.querySelector("#fContratista").value;
-      if (!nombre || !contratistaId) return;
-      const contratista = contratistas.find((c) => c.id === contratistaId);
-
-      const lotesElegidos = Array.from(container.querySelectorAll(".fLoteCheck:checked")).map((el) => ({
-        loteId: el.value,
-        loteNombre: el.dataset.nombre,
-      }));
-      if (lotesElegidos.length === 0) {
-        alert("Elegí al menos un lote.");
-        return;
-      }
-
-      const filas = Array.from(container.querySelectorAll(".producto-row"));
-      const productosPlanificados = [];
-      const idsVistos = new Set();
-      for (const fila of filas) {
-        const productoId = fila.querySelector(".fProductoRow").value;
-        const cantidad = parseFloat(fila.querySelector(".fCantidadRow").value) || 0;
-        if (!productoId || cantidad <= 0) continue;
-        if (idsVistos.has(productoId)) {
-          alert("Elegiste el mismo producto en más de una fila. Sumalo en una sola.");
-          return;
-        }
-        idsVistos.add(productoId);
-        const producto = insumos.find((i) => i.id === productoId);
-        productosPlanificados.push({
-          productoId,
-          productoNombre: producto ? producto.nombre : "",
-          unidad: producto ? producto.unidad : "",
-          cantidad,
-        });
-      }
-
-      const registro = {
-        id: uid(),
-        nombre,
-        contratistaId,
-        contratistaNombre: contratista ? contratista.nombre : "",
-        lotes: lotesElegidos,
-        fechaAsignacion: container.querySelector("#fFechaAsignacion").value,
-        fechaLimite: container.querySelector("#fFechaLimite").value,
-        productosPlanificados,
-        observaciones: container.querySelector("#fObs").value.trim(),
-        fechaCreacion: new Date().toISOString(),
-        sincronizado: false,
-        fechaCreacionRegistro: new Date().toISOString(),
-      };
-      await dbPut(STORE, registro);
-      window.dispatchEvent(new Event("appcampo-sync-now"));
+    container.querySelector("#fContratistaFiltro").addEventListener("change", (e) => {
+      this.state.contratistaId = e.target.value;
       this.render(container);
     });
 
-    await renderListadoOrdenes(container, ordenes);
+    const ordenesFiltradas = this.state.contratistaId
+      ? ordenes.filter((o) => o.contratistaId === this.state.contratistaId)
+      : ordenes;
+
+    // Por fecha de inicio (fechaAsignacion) — antes se ordenaba por plazo,
+    // ahora separado en 2 grupos así que el orden de "arranque" es más útil.
+    const porFechaInicio = (a, b) => (a.fechaAsignacion || "").localeCompare(b.fechaAsignacion || "");
+    const pendientes = ordenesFiltradas.filter((o) => o.estado !== "completada").sort(porFechaInicio);
+    const realizadas = ordenesFiltradas.filter((o) => o.estado === "completada").sort(porFechaInicio);
+
+    renderListado(container.querySelector("#listaPendientes"), "Pendientes", pendientes, this.state.contratistaId, "Este contratista no tiene órdenes pendientes.");
+    // Realizadas: se listan solo para consultar, así que van colapsadas
+    // (lote + fecha) y ocupan una sola línea hasta que se las abre a
+    // propósito — el detalle completo (productos, dosis, necesidad total)
+    // ya no importa para el día a día una vez que la orden está hecha.
+    renderListadoRealizadas(container.querySelector("#listaRealizadas"), realizadas, this.state.contratistaId);
   },
 };
 
-async function renderListadoOrdenes(container, ordenes) {
-  const lista = container.querySelector("#listaOrdenes");
+function tablaProductos(o) {
+  const filasProductos = o.comparacionProductos.length
+    ? o.comparacionProductos
+        .map(
+          (p) => `
+      <tr>
+        <td>${p.productoNombre}</td>
+        <td>${p.dosisPorHa} ${p.unidad || ""}/ha</td>
+        <td>${p.necesidadTotal} ${p.unidad || ""}</td>
+      </tr>`
+        )
+        .join("")
+    : '<tr><td colspan="3" class="muted">Sin productos cargados.</td></tr>';
+  return `
+    <table class="tabla-orden">
+      <thead><tr><th>Producto</th><th>Dosis</th><th>Necesidad total</th></tr></thead>
+      <tbody>${filasProductos}</tbody>
+    </table>`;
+}
+
+function renderListado(lista, titulo, ordenes, contratistaId, mensajeVacioConFiltro) {
   if (ordenes.length === 0) {
-    lista.innerHTML = '<div class="empty-state">Todavía no creaste ninguna orden de trabajo.</div>';
+    lista.innerHTML = `<h2 style="margin-top:0;">${titulo} (0)</h2><div class="empty-state">${
+      contratistaId ? mensajeVacioConFiltro : "No hay órdenes en este grupo."
+    }</div>`;
     return;
   }
-  lista.innerHTML = `<h2 style="margin-top:0;">Órdenes</h2>`;
+  lista.innerHTML = `<h2 style="margin-top:0;">${titulo} (${ordenes.length})</h2>`;
   for (const o of ordenes) {
-    const { texto: estadoTxt, clase: estadoClase } = etiquetaEstado(o);
-    const lotesTxt = o.lotes.map((l) => `${l.loteNombre}${l.aplicado ? " ✓" : ""}`).join(", ");
-    const productosTxt = o.comparacionProductos.length
-      ? o.comparacionProductos
-          .map(
-            (p) =>
-              `<div class="muted">${p.productoNombre}: planificado ${p.planificado} ${p.unidad || ""} · aplicado ${p.aplicado} ${p.unidad || ""}${
-                p.diferencia !== 0
-                  ? ` · <strong>${p.diferencia > 0 ? "+" : ""}${p.diferencia} ${p.unidad || ""}</strong>`
-                  : " · sin diferencia"
-              }</div>`
-          )
-          .join("")
-      : "";
-
+    const lotesTxt = o.lotes.map((l) => l.loteNombre).join(", ");
     const row = document.createElement("div");
     row.className = "list-item";
+    row.style.flexDirection = "column";
+    row.style.alignItems = "stretch";
     row.innerHTML = `
-      <div>
-        <div><strong>${o.nombre}</strong> — ${o.contratistaNombre} <span class="pill ${estadoClase}">${estadoTxt}</span></div>
-        <div class="muted">Lotes (${o.lotesAplicadosCount}/${o.totalLotes} aplicados): ${lotesTxt}</div>
-        <div class="muted">Plazo: ${o.fechaLimite || "sin definir"}${o.observaciones ? " · " + o.observaciones : ""}</div>
-        ${productosTxt}
-      </div>
-      <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
-        <span class="pill ${o.sincronizado ? "sincronizado" : "pendiente"}">${o.sincronizado ? "Sincronizado" : "Pendiente"}</span>
-        <button class="danger" data-id="${o.id}">Borrar</button>
+      <div><strong>${o.nombre}</strong></div>
+      <div class="muted">Lote${o.lotes.length > 1 ? "s" : ""}: ${lotesTxt}</div>
+      <div class="muted">Fecha: ${formatearFechaCorta(o.fechaAsignacion)}${o.fechaLimite ? " – " + formatearFechaCorta(o.fechaLimite) : ""}</div>
+      ${tablaProductos(o)}
+    `;
+    lista.appendChild(row);
+  }
+}
+
+function tablaProductosRealizada(o) {
+  const filasProductos = o.comparacionProductos.length
+    ? o.comparacionProductos
+        .map(
+          (p) => `
+      <tr>
+        <td>${p.productoNombre}</td>
+        <td>${p.dosisPorHa} ${p.unidad || ""}/ha</td>
+        <td>${p.dosisReal !== null ? p.dosisReal + " " + (p.unidad || "") + "/ha" : "—"}</td>
+      </tr>`
+        )
+        .join("")
+    : '<tr><td colspan="3" class="muted">Sin productos cargados.</td></tr>';
+  return `
+    <table class="tabla-orden">
+      <thead><tr><th>Producto</th><th>Dosis</th><th>Dosis real</th></tr></thead>
+      <tbody>${filasProductos}</tbody>
+    </table>`;
+}
+
+function renderListadoRealizadas(lista, ordenes, contratistaId) {
+  if (ordenes.length === 0) {
+    lista.innerHTML = `<h2 style="margin-top:0;">Realizadas (0)</h2><div class="empty-state">${
+      contratistaId ? "Este contratista no tiene órdenes realizadas todavía." : "No hay órdenes realizadas."
+    }</div>`;
+    return;
+  }
+  lista.innerHTML = `<h2 style="margin-top:0;">Realizadas (${ordenes.length})</h2>`;
+  for (const o of ordenes) {
+    const lotesTxt = o.lotes.map((l) => l.loteNombre).join(", ");
+    const det = document.createElement("details");
+    det.className = "orden-realizada";
+    det.innerHTML = `
+      <summary>${lotesTxt} — ${formatearFechaCorta(o.fechaAsignacion)}</summary>
+      <div style="padding-top:8px;">
+        <div><strong>${o.nombre}</strong></div>
+        <div class="muted">Fecha: ${formatearFechaCorta(o.fechaAsignacion)}${o.fechaLimite ? " – " + formatearFechaCorta(o.fechaLimite) : ""}</div>
+        <div class="muted">Has realizadas: ${o.hasAplicadas} ha</div>
+        ${tablaProductosRealizada(o)}
       </div>
     `;
-    row.querySelector("button").addEventListener("click", async () => {
-      if (confirm(`¿Borrar la orden "${o.nombre}"? Las aplicaciones ya vinculadas no se borran, pero dejan de mostrar la comparación.`)) {
-        await dbDelete(STORE, o.id);
-        ordenesTrabajoView.render(container);
-      }
-    });
-    lista.appendChild(row);
+    lista.appendChild(det);
   }
 }
 

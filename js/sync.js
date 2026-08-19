@@ -70,7 +70,7 @@ function flattenOrdenTrabajo(r) {
   out.lotesNombres = (r.lotes || []).map((l) => l.loteNombre).join(", ");
   (r.productosPlanificados || []).forEach((p, i) => {
     out[`producto${i + 1}Nombre`] = p.productoNombre;
-    out[`producto${i + 1}Cantidad`] = p.cantidad;
+    out[`producto${i + 1}DosisPorHa`] = p.dosisPorHa;
     out[`producto${i + 1}Unidad`] = p.unidad;
   });
   out.lotes = undefined;
@@ -435,23 +435,12 @@ async function unflattenMovimiento(fila) {
     const proveedorId = await resolverIdPorNombre("proveedores", fila.proveedorNombre);
     return { ...base, proveedorId, proveedorNombre: String(fila.proveedorNombre || "").trim(), foto: null };
   }
-  if (fila.tipo === "salida") {
-    const orden = await resolverOrden(fila.ordenTrabajoNombre, fila.contratistaNombre);
-    return {
-      ...base,
-      ordenTrabajoId: orden ? orden.id : null,
-      ordenTrabajoNombre: String(fila.ordenTrabajoNombre || "").trim(),
-      contratistaId: orden ? orden.contratistaId : null,
-      contratistaNombre: String(fila.contratistaNombre || "").trim(),
-    };
-  }
-  // devolucion
-  const orden = await resolverOrden(fila.ordenTrabajoNombre, fila.contratistaNombre);
+  // salida y devolución: ambas llevan contratista directo — ya no pasan por
+  // una orden de trabajo (se sacó ese campo de Insumos → Salida/Devolución).
+  const contratistaId = await resolverIdPorNombre("contratistas", fila.contratistaNombre);
   return {
     ...base,
-    ordenTrabajoId: orden ? orden.id : null,
-    ordenTrabajoNombre: String(fila.ordenTrabajoNombre || "").trim(),
-    contratistaId: orden ? orden.contratistaId : null,
+    contratistaId,
     contratistaNombre: String(fila.contratistaNombre || "").trim(),
   };
 }
@@ -573,27 +562,32 @@ async function unflattenOrdenTrabajo(fila) {
   const productosPlanificados = [];
   for (let i = 1; i <= 6; i++) {
     const nombre = fila[`producto${i}Nombre`];
-    const cantidad = fila[`producto${i}Cantidad`];
-    if (!nombre || cantidad === "" || cantidad === undefined) continue;
+    const dosisPorHa = fila[`producto${i}DosisPorHa`];
+    if (!nombre || dosisPorHa === "" || dosisPorHa === undefined) continue;
     const productoId = await resolverIdPorNombre("insumos", nombre, { unidad: fila[`producto${i}Unidad`] || "" });
     productosPlanificados.push({
       productoId,
       productoNombre: String(nombre).trim(),
       unidad: fila[`producto${i}Unidad`] || "",
-      cantidad: parseFloat(cantidad) || 0,
+      dosisPorHa: parseFloat(dosisPorHa) || 0,
     });
   }
   const nombreOrden = String(fila.nombre || "").trim();
   const existentes = await dbGetAll("ordenesTrabajo");
   const existente = existentes.find((o) => o.nombre.trim().toLowerCase() === nombreOrden.toLowerCase());
+  // "id" ahora es una columna que llena el sistema, no el asesor (queda
+  // pintada de gris en la Sheet) — para una orden realmente nueva, casi
+  // siempre va a venir vacía, así que hace falta generar un id acá mismo en
+  // vez de asumir que la fila trae uno.
   return {
-    id: existente ? existente.id : fila.id,
+    id: existente ? existente.id : fila.id || uid(),
     nombre: nombreOrden,
     contratistaId,
     contratistaNombre: String(fila.contratistaNombre || "").trim(),
     lotes,
     fechaAsignacion: fila.fechaAsignacion || "",
     fechaLimite: fila.fechaLimite || "",
+    has: parseFloat(fila.has) || 0,
     productosPlanificados,
     observaciones: fila.observaciones || "",
     fechaCreacion: fila.fechaCreacion || new Date().toISOString(),
@@ -634,7 +628,18 @@ async function pullAll() {
     const existentes = await dbGetAll(store);
     const idsExistentes = new Set(existentes.map((e) => e.id));
     for (const fila of filas) {
-      if (!fila.id || idsExistentes.has(fila.id)) continue;
+      // "ordenTrabajo" es distinto a los demás tipos: el asesor no tipea un
+      // id (esa columna la llena el sistema, ver aplicarValidacionOrdenesTrabajo
+      // en Code.gs), así que una orden recién cargada en la Sheet llega con
+      // fila.id vacío — el filtro genérico por id la descartaría siempre sin
+      // llegar nunca a unflattenOrdenTrabajo (que sí sabe resolverla por
+      // nombre). Para este tipo se usa "nombre" como señal de fila real, y
+      // se deja que unflattenOrdenTrabajo decida si es nueva o ya existía.
+      if (tipo === "ordenTrabajo") {
+        if (!fila.nombre) continue;
+      } else if (!fila.id || idsExistentes.has(fila.id)) {
+        continue;
+      }
       try {
         const registro = await unflatten(fila);
         await dbPut(store, registro);

@@ -1,5 +1,6 @@
 import { dbGetAll, dbGet, dbPut, dbDelete, uid } from "./db.js";
 import { getSilosBolsaConStock, getStockGranosPorCultivo, agruparSilosPorNombreCultivo } from "./stockUtils.js";
+import { parseNumero } from "./ui.js";
 
 const STORE = "cargasGranos";
 const STORE_AJUSTES = "ajustesSiloBolsa";
@@ -162,7 +163,7 @@ const cargaGranosView = {
               <select id="fOrigenId" required></select>
             </div>
             <label id="fNetoLabel" style="margin-top:8px;">Kg netos</label>
-            <input type="number" step="1" id="fNeto" required />
+            <input type="text" inputmode="decimal" id="fNeto" required />
             <div class="field hidden" id="bloqueFinalizarOrigen1" style="margin-top:6px;">
               <label class="checkbox-field"><input type="checkbox" id="fFinalizarOrigen1" /> Este es el último camión de este silo bolsa — finalizarlo</label>
             </div>
@@ -179,7 +180,7 @@ const cargaGranosView = {
               <select id="fOrigen2Id"></select>
             </div>
             <label style="margin-top:8px;">Kg netos 2do origen</label>
-            <input type="number" step="1" id="fKgOrigen2" placeholder="Ej: 8000" />
+            <input type="text" inputmode="decimal" id="fKgOrigen2" placeholder="Ej: 8000" />
             <div class="field hidden" id="bloqueFinalizarOrigen2" style="margin-top:6px;">
               <label class="checkbox-field"><input type="checkbox" id="fFinalizarOrigen2" /> Este es el último camión de este silo bolsa — finalizarlo</label>
             </div>
@@ -220,7 +221,7 @@ const cargaGranosView = {
 
           <div class="field">
             <label>Humedad (%)</label>
-            <input type="number" step="0.1" id="fHumedad" />
+            <input type="text" inputmode="decimal" id="fHumedad" />
           </div>
 
           <div class="field">
@@ -313,8 +314,8 @@ const cargaGranosView = {
     // total se calcula sumando — nunca restando uno del otro.
     function actualizarNetoTotal() {
       if (!origen2Activo) return;
-      const kg1 = parseFloat(fNeto.value) || 0;
-      const kg2 = parseFloat(fKgOrigen2.value) || 0;
+      const kg1 = parseNumero(fNeto.value);
+      const kg2 = parseNumero(fKgOrigen2.value);
       fNetoTotal.textContent = (kg1 + kg2).toLocaleString("es-AR");
     }
 
@@ -376,7 +377,7 @@ const cargaGranosView = {
         alert("Elegí el origen (lote o silo bolsa).");
         return;
       }
-      const kgOrigen1 = parseFloat(container.querySelector("#fNeto").value) || 0;
+      const kgOrigen1 = parseNumero(container.querySelector("#fNeto").value);
 
       let kgOrigen2 = 0;
       let origen2Id = "";
@@ -390,7 +391,7 @@ const cargaGranosView = {
           alert("Elegiste el mismo origen dos veces. Si es un solo origen, quitá el segundo.");
           return;
         }
-        kgOrigen2 = parseFloat(fKgOrigen2.value) || 0;
+        kgOrigen2 = parseNumero(fKgOrigen2.value);
         if (kgOrigen2 <= 0) {
           alert("Ingresá los kg netos del segundo origen.");
           return;
@@ -474,7 +475,7 @@ const cargaGranosView = {
         kgBrutos: 0,
         tara: 0,
         kgNeto: neto,
-        humedad: parseFloat(container.querySelector("#fHumedad").value) || null,
+        humedad: container.querySelector("#fHumedad").value.trim() ? parseNumero(container.querySelector("#fHumedad").value) : null,
         observaciones: container.querySelector("#fObs").value.trim(),
         gps,
         foto: fotoBlob,
