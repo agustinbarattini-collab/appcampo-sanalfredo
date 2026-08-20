@@ -92,4 +92,23 @@ async function dbDelete(storeName, id) {
   });
 }
 
-export { openDb, uid, dbGetAll, dbGet, dbPut, dbDelete };
+// Borra la base local entera (todas las pestañas) para forzar una
+// resincronización de cero desde la Sheet — ver APP_CONFIG.resetVersion en
+// config.js. Cierra la conexión abierta antes de borrar (si no, el borrado
+// queda "blocked" indefinidamente) y limpia dbPromise para que la próxima
+// llamada a openDb() abra una base nueva en vez de reusar la cerrada.
+async function borrarTodoLocal() {
+  const db = await openDb();
+  db.close();
+  dbPromise = null;
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.deleteDatabase(DB_NAME);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+    // No debería bloquearse (recién cerramos la única conexión abierta),
+    // pero por las dudas no lo dejamos colgado esperando para siempre.
+    req.onblocked = () => resolve();
+  });
+}
+
+export { openDb, uid, dbGetAll, dbGet, dbPut, dbDelete, borrarTodoLocal };
