@@ -81,14 +81,13 @@ const RESET_STORAGE_KEY = "appcampo_reset_version";
 
 async function verificarResetRemoto() {
   const versionObjetivo = APP_CONFIG.resetVersion || 0;
-  const versionGuardadaRaw = localStorage.getItem(RESET_STORAGE_KEY);
-  if (versionGuardadaRaw === null) {
-    // Primera vez que corre este código en este teléfono: no borrar nada
-    // de arranque, solo memorizar la versión actual como "ya vista".
-    localStorage.setItem(RESET_STORAGE_KEY, String(versionObjetivo));
-    return false;
-  }
-  if ((Number(versionGuardadaRaw) || 0) >= versionObjetivo) return false;
+  // Sin nada guardado todavía (primera vez que corre este código en este
+  // teléfono) se toma como versión 0 — así un teléfono viejo que nunca supo
+  // de esto pero necesita el reset (resetVersion > 0) lo recibe en su
+  // primer load con esta versión, en vez de marcarse como "ya al día" sin
+  // haber borrado nada.
+  const versionGuardada = Number(localStorage.getItem(RESET_STORAGE_KEY)) || 0;
+  if (versionGuardada >= versionObjetivo) return false;
 
   const pendientes = await contarPendientes();
   if (pendientes > 0) {
