@@ -106,6 +106,7 @@ function renderListado(lista, titulo, ordenes, contratistaId, mensajeVacioConFil
     row.innerHTML = `
       <div><strong>${o.nombre}</strong></div>
       <div class="muted">Lote${o.lotes.length > 1 ? "s" : ""}: ${lotesTxt}</div>
+      ${o.observaciones ? `<div class="muted">Observaciones: ${o.observaciones}</div>` : ""}
       <div class="muted">Fecha: ${formatearFechaCorta(o.fechaAsignacion)}${o.fechaLimite ? " – " + formatearFechaCorta(o.fechaLimite) : ""}</div>
       ${tablaProductos(o)}
     `;
@@ -149,6 +150,7 @@ function renderListadoRealizadas(lista, ordenes, contratistaId) {
       <summary>${lotesTxt} — ${formatearFechaCorta(o.fechaAsignacion)}</summary>
       <div style="padding-top:8px;">
         <div><strong>${o.nombre}</strong></div>
+        ${o.observaciones ? `<div class="muted">Observaciones: ${o.observaciones}</div>` : ""}
         <div class="muted">Fecha: ${formatearFechaCorta(o.fechaAsignacion)}${o.fechaLimite ? " – " + formatearFechaCorta(o.fechaLimite) : ""}</div>
         <div class="muted">Has realizadas: ${o.hasAplicadas} ha</div>
         ${tablaProductosRealizada(o)}
