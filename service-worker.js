@@ -1,4 +1,4 @@
-const CACHE_NAME = "appcampo-sanalfredo-v10";
+const CACHE_NAME = "appcampo-sanalfredo-v11";
 const APP_SHELL = [
   "./",
   "./index.html",

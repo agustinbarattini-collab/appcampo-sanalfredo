@@ -105,7 +105,7 @@ function renderListado(lista, titulo, ordenes, contratistaId, mensajeVacioConFil
     row.style.alignItems = "stretch";
     row.innerHTML = `
       <div><strong>${o.nombre}</strong></div>
-      <div class="muted">Lote${o.lotes.length > 1 ? "s" : ""}: ${lotesTxt}</div>
+      <div class="muted">Lote${o.lotes.length > 1 ? "s" : ""}: ${lotesTxt} · ${o.has} ha</div>
       ${o.observaciones ? `<div class="muted">Observaciones: ${o.observaciones}</div>` : ""}
       <div class="muted">Fecha: ${formatearFechaCorta(o.fechaAsignacion)}${o.fechaLimite ? " – " + formatearFechaCorta(o.fechaLimite) : ""}</div>
       ${tablaProductos(o)}
