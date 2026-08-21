@@ -69,18 +69,21 @@ async function updateSyncStatus() {
   }
 }
 
-// Reset remoto: si APP_CONFIG.resetVersion subió respecto de lo que este
-// teléfono tiene guardado, borra toda la base local y recarga — así se
-// puede forzar que todos los dispositivos "arranquen de cero" (ej. después
-// de borrar algo grande directo en la Sheet) sin pedirle a cada uno que
-// vaya a borrar el almacenamiento a mano desde Chrome. Corre DESPUÉS de
-// syncAll() para que cualquier registro pendiente ya se haya subido; si
-// todavía queda algo sin sincronizar (sin conexión, por ejemplo), no borra
-// nada y reintenta en el próximo inicio, para no perder datos.
+// Reset remoto: el asesor lo dispara desde el menú "App de Campo" en la
+// Sheet (forzarResetTelefonos() en Code.gs), que sube un contador guardado
+// en la pestaña "Config". Ese contador viaja en la misma respuesta de
+// "leerMaestros" (ver importarMaestros() en sync.js); si es mayor al que
+// este teléfono tiene guardado, se borra toda la base local y se recarga —
+// así se puede forzar que todos los dispositivos "arranquen de cero" (ej.
+// después de borrar algo grande directo en la Sheet) sin pedirle a cada
+// uno que vaya a borrar el almacenamiento a mano desde Chrome. Se decide
+// DESPUÉS de importarMaestros() (que ya corrió syncAll() antes, así que
+// cualquier pendiente ya se subió); si todavía queda algo sin sincronizar
+// (sin conexión, por ejemplo), no borra nada y reintenta en el próximo
+// inicio, para no perder datos.
 const RESET_STORAGE_KEY = "appcampo_reset_version";
 
-async function verificarResetRemoto() {
-  const versionObjetivo = APP_CONFIG.resetVersion || 0;
+async function verificarResetRemoto(versionObjetivo) {
   // Sin nada guardado todavía (primera vez que corre este código en este
   // teléfono) se toma como versión 0 — así un teléfono viejo que nunca supo
   // de esto pero necesita el reset (resetVersion > 0) lo recibe en su
@@ -101,10 +104,6 @@ async function verificarResetRemoto() {
 
 async function runSync() {
   await syncAll();
-  if (await verificarResetRemoto()) {
-    location.reload();
-    return;
-  }
   // Los maestros (Lotes/Silos/Corredores/etc.) se traen ANTES que pullAll():
   // al traer una Carga de Granos, su origen se resuelve por NOMBRE contra los
   // maestros locales (resolverIdPorNombre en sync.js) y, si no encuentra
@@ -116,7 +115,11 @@ async function runSync() {
   // duplicado suelto, sin ninguna carga apuntándolo. Trayendo los maestros
   // primero, pullAll() ya encuentra el maestro real y no hace falta ningún
   // cascarón.
-  await importarMaestros();
+  const resultadoMaestros = await importarMaestros();
+  if (await verificarResetRemoto(resultadoMaestros.resetVersion || 0)) {
+    location.reload();
+    return;
+  }
   await pullAll();
   await updateSyncStatus();
   // Refresca la vista actual por si trajo datos nuevos de otros dispositivos.

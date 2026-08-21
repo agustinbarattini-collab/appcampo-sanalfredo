@@ -137,6 +137,12 @@ const MAESTROS_SHEETS = {
   planSiembra: { name: "Maestros - Plan Siembra", headers: ["loteNombre", "cultivo", "superficieTeorica", "campaniaNombre"] },
 };
 
+// Pestaña chica de clave/valor para ajustes puntuales editables desde la
+// Sheet sin tocar código — hoy solo tiene "resetVersion" (ver más abajo,
+// forzarResetTelefonos), pero sirve como lugar genérico si hace falta otro
+// ajuste similar más adelante.
+const CONFIG_SHEET = { name: "Config", headers: ["clave", "valor"] };
+
 /**
  * Correr esta función UNA vez desde el editor (▶) para crear las pestañas con sus
  * encabezados. Google va a pedir autorización la primera vez: es normal, hay que
@@ -151,12 +157,107 @@ function setup() {
   Object.keys(MAESTROS_SHEETS).forEach(function (key) {
     crearPestana(ss, MAESTROS_SHEETS[key]);
   });
+  crearPestana(ss, CONFIG_SHEET);
+  asegurarValorConfigInicial("resetVersion", 0);
   ["Hoja 1", "Sheet1"].forEach(function (n) {
     const s = ss.getSheetByName(n);
     if (s && ss.getSheets().length > 1) ss.deleteSheet(s);
   });
   aplicarValidacionCampanias();
   aplicarValidacionOrdenesTrabajo();
+}
+
+/**
+ * Se corre sola cada vez que se abre la planilla (trigger simple de Apps
+ * Script, no hace falta activarlo a mano) y agrega el menú "App de Campo"
+ * con acciones que conviene poder hacer sin entrar al editor de código.
+ */
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu("App de Campo")
+    .addItem("Forzar reset en todos los celulares...", "forzarResetTelefonos")
+    .addToUi();
+}
+
+/**
+ * Lee un valor guardado en la pestaña "Config" (clave/valor). Devuelve null
+ * si esa clave todavía no tiene fila.
+ */
+function leerValorConfig(clave) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const hoja = ss.getSheetByName(CONFIG_SHEET.name);
+  if (!hoja) return null;
+  const lastRow = hoja.getLastRow();
+  if (lastRow < 2) return null;
+  const filas = hoja.getRange(2, 1, lastRow - 1, 2).getValues();
+  for (const fila of filas) {
+    if (String(fila[0]).trim() === clave) return fila[1];
+  }
+  return null;
+}
+
+/**
+ * Escribe (o crea) la fila clave/valor de "Config" correspondiente a clave.
+ */
+function escribirValorConfig(clave, valor) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let hoja = ss.getSheetByName(CONFIG_SHEET.name);
+  if (!hoja) {
+    crearPestana(ss, CONFIG_SHEET);
+    hoja = ss.getSheetByName(CONFIG_SHEET.name);
+  }
+  const lastRow = hoja.getLastRow();
+  if (lastRow >= 2) {
+    const claves = hoja.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (let i = 0; i < claves.length; i++) {
+      if (String(claves[i][0]).trim() === clave) {
+        hoja.getRange(i + 2, 2).setValue(valor);
+        return;
+      }
+    }
+  }
+  hoja.appendRow([clave, valor]);
+}
+
+// Se llama desde setup(): asegura que "resetVersion" tenga un valor inicial
+// en Config, sin pisar uno que ya se haya subido a mano (correr setup() de
+// nuevo después de forzar un reset no debe volver el contador para atrás).
+function asegurarValorConfigInicial(clave, porDefecto) {
+  if (leerValorConfig(clave) === null) {
+    escribirValorConfig(clave, porDefecto);
+  }
+}
+
+/**
+ * Sube en 1 el contador "resetVersion" de Config. Cada celular lo revisa al
+ * sincronizar (viene incluido en la respuesta de "leerMaestros"): si ve un
+ * número más alto que el que tiene guardado, borra TODO lo que tiene
+ * guardado localmente y vuelve a descargar todo de cero desde esta
+ * planilla (ver verificarResetRemoto() en app.js). No es instantáneo: se
+ * aplica recién la próxima vez que cada celular sincronice con conexión.
+ * Antes de tocar nada, muestra un aviso que hay que confirmar a propósito.
+ */
+function forzarResetTelefonos() {
+  const ui = SpreadsheetApp.getUi();
+  const mensaje =
+    "Esto va a borrar los datos guardados en TODOS los celulares que usan esta app " +
+    "y hacer que vuelvan a descargar todo de cero desde esta planilla.\n\n" +
+    "Usalo solo cuando ya borraste o reorganizaste algo grande directo en la Sheet " +
+    "(por ejemplo, el stock de Insumos o las Aplicaciones de Fitosanitarios) y " +
+    "necesitás que los celulares dejen de mostrar lo viejo.\n\n" +
+    "Tené en cuenta:\n" +
+    "• No es instantáneo: se aplica recién la próxima vez que cada celular abra " +
+    "la app CON conexión a internet.\n" +
+    "• Si un celular tiene algo cargado todavía sin sincronizar, no se le borra " +
+    "nada — espera solo a que sincronice y reintenta después, sin perder nada.\n" +
+    "• Esto no borra ni modifica nada de esta planilla, solo lo que cada celular " +
+    "tiene guardado en su propia memoria.\n\n" +
+    "¿Confirmás que querés forzar el reset en todos los celulares?";
+  const respuesta = ui.alert("Forzar reset en todos los celulares", mensaje, ui.ButtonSet.OK_CANCEL);
+  if (respuesta !== ui.Button.OK) return;
+  const actual = Number(leerValorConfig("resetVersion")) || 0;
+  escribirValorConfig("resetVersion", actual + 1);
+  ui.alert("Listo. Se va a aplicar en cada celular la próxima vez que sincronice con conexión a internet.");
 }
 
 /**
@@ -510,7 +611,8 @@ function responderMaestros() {
     const sheet = ss.getSheetByName(cfg.name);
     maestros[key] = sheet ? leerPestana(sheet, cfg.headers) : [];
   });
-  return respond({ ok: true, maestros: maestros });
+  const resetVersion = Number(leerValorConfig("resetVersion")) || 0;
+  return respond({ ok: true, maestros: maestros, resetVersion: resetVersion });
 }
 
 function responderRegistros() {

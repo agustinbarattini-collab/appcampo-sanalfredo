@@ -295,7 +295,9 @@ async function importarMaestros() {
     resumen[MAESTROS_ETIQUETAS.planSiembra] = { nuevos, actualizados };
   }
 
-  return { ok: true, resumen };
+  // Viene en la misma respuesta de "leerMaestros" — ver forzarResetTelefonos()
+  // en Code.gs y verificarResetRemoto() en app.js.
+  return { ok: true, resumen, resetVersion: Number(data.resetVersion) || 0 };
 }
 
 // ---------------------------------------------------------------------------
