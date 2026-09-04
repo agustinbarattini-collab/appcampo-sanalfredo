@@ -62,6 +62,14 @@ const contratistasView = renderMaestroSimple({
   campoLabel: "Nombre del contratista",
 });
 
+// Solo aparece útil en empresas con más de un depósito de Insumos — en el
+// resto queda vacío (ver Insumos → Movimiento en la app).
+const galponesView = renderMaestroSimple({
+  store: "galpones",
+  titulo: "Galpones (depósitos de Insumos)",
+  campoLabel: "Nombre del galpón",
+});
+
 const insumosView = renderMaestroSimple({
   store: "insumos",
   titulo: "Insumos",
@@ -165,4 +173,4 @@ const campaniasView = {
   },
 };
 
-export { lotesView, corredoresView, silosBolsaView, proveedoresView, contratistasView, insumosView, campaniasView };
+export { lotesView, corredoresView, silosBolsaView, proveedoresView, contratistasView, insumosView, campaniasView, galponesView };

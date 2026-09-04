@@ -6,6 +6,7 @@ import {
   contratistasView,
   insumosView,
   campaniasView,
+  galponesView,
 } from "./maestros.js";
 import { APP_CONFIG } from "./config.js";
 import { importarMaestros } from "./sync.js";
@@ -18,6 +19,7 @@ const subViews = {
   insumos: { view: insumosView, label: "Insumos" },
   proveedores: { view: proveedoresView, label: "Proveedores" },
   contratistas: { view: contratistasView, label: "Contratistas" },
+  galpones: { view: galponesView, label: "Galpones" },
 };
 
 const maestrosHubView = {
