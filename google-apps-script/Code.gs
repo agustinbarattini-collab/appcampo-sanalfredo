@@ -47,6 +47,16 @@ const SHEETS = {
       "fechaSincronizacion",
       // La foto del remito, si se sacó una (ver guardarFotoEnDrive).
       "fotoUrl",
+      // Agregado para llevar stock por galpón (empresas con más de un
+      // depósito, ej. LCDP, 2026-08-21): en Ingreso/Salida/Devolución,
+      // galponNombre es a qué galpón corresponde. En "movimiento" (ver tipo
+      // "movimiento" — transferencia entre galpones o ajuste por
+      // diferencia, no afecta ninguna orden ni la cuenta de un
+      // contratista), galponNombre es el origen (transferencia) o el
+      // galpón ajustado (ajuste), y galponDestinoNombre el destino (solo
+      // transferencia). Van al final para no correr de lugar los datos ya
+      // cargados en empresas que no usan galpones (quedan vacías ahí).
+      "galponNombre", "galponDestinoNombre", "subtipoMovimiento", "tipoDiferencia",
     ],
   },
   aplicacionFitosanitaria: {
@@ -135,6 +145,11 @@ const MAESTROS_SHEETS = {
   contratistas: { name: "Maestros - Contratistas", headers: ["nombre"] },
   campanias: { name: "Maestros - Campañas", headers: ["nombre", "activa"] },
   planSiembra: { name: "Maestros - Plan Siembra", headers: ["loteNombre", "cultivo", "superficieTeorica", "campaniaNombre"] },
+  // Depósitos/galpones para llevar el stock de Insumos desglosado por lugar
+  // físico (ver Insumos → Movimiento en la app). En empresas de un solo
+  // depósito esta pestaña queda vacía y la app se comporta igual que
+  // siempre (un solo pool de stock).
+  galpones: { name: "Maestros - Galpones", headers: ["nombre"] },
 };
 
 // Pestaña chica de clave/valor para ajustes puntuales editables desde la

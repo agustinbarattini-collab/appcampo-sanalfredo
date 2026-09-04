@@ -1,5 +1,5 @@
 import { dbGetAll, dbPut, dbDelete, uid } from "./db.js";
-import { getInsumosConStock, getSaldoInsumosPendientes } from "./stockUtils.js";
+import { getInsumosConStock, getStockPorGalpon, getSaldoInsumosPendientes } from "./stockUtils.js";
 import { toast, parseNumero } from "./ui.js";
 
 const STORE = "movimientosInsumos";
@@ -18,8 +18,45 @@ function opts(list, { withStock } = {}) {
     .join("");
 }
 
-function renderStockCard(container, insumos) {
+function optsGalpones(galpones, placeholder = "Seleccionar...") {
+  return (
+    `<option value="">${placeholder}</option>` +
+    galpones
+      .slice()
+      .sort((a, b) => a.nombre.localeCompare(b.nombre))
+      .map((g) => `<option value="${g.id}">${g.nombre}</option>`)
+      .join("")
+  );
+}
+
+function renderStockCard(container, insumos, stockPorGalpon) {
   const el = container.querySelector("#stockCard");
+  if (stockPorGalpon) {
+    const { galpones, insumosConStock } = stockPorGalpon;
+    const conStock = insumosConStock.filter((i) => i.total > 0).sort((a, b) => a.nombre.localeCompare(b.nombre));
+    el.innerHTML =
+      `<h2 style="margin-top:0;">Stock actual</h2>` +
+      (conStock.length
+        ? `<div style="overflow-x:auto;">
+            <table class="tabla-orden">
+              <thead><tr><th>Insumo</th>${galpones.map((g) => `<th>${g.nombre}</th>`).join("")}<th>Total</th></tr></thead>
+              <tbody>
+                ${conStock
+                  .map(
+                    (i) => `
+                  <tr>
+                    <td>${i.nombre}</td>
+                    ${galpones.map((g) => `<td>${i.porGalpon[g.id]} ${i.unidad || ""}</td>`).join("")}
+                    <td><strong>${i.total} ${i.unidad || ""}</strong></td>
+                  </tr>`
+                  )
+                  .join("")}
+              </tbody>
+            </table>
+          </div>`
+        : '<div class="empty-state">Todavía no hay insumos con stock cargado.</div>');
+    return;
+  }
   const conStock = insumos.filter((i) => i.stock > 0).sort((a, b) => a.nombre.localeCompare(b.nombre));
   el.innerHTML =
     `<h2 style="margin-top:0;">Stock actual</h2>` +
@@ -36,11 +73,13 @@ const movimientosInsumosView = {
   state: { tipo: "ingreso" },
 
   async render(container) {
-    const [insumos, proveedores, contratistas, saldoInsumosPendientes] = await Promise.all([
+    const [insumos, proveedores, contratistas, saldoInsumosPendientes, galpones, stockPorGalpon] = await Promise.all([
       getInsumosConStock(),
       dbGetAll("proveedores"),
       dbGetAll("contratistas"),
       getSaldoInsumosPendientes(),
+      dbGetAll("galpones"),
+      getStockPorGalpon(),
     ]);
 
     if (insumos.length === 0) {
@@ -53,6 +92,14 @@ const movimientosInsumosView = {
       return;
     }
 
+    // Con "Movimiento" (transferencia entre galpones/ajuste) recién viene el
+    // segundo botón; sin galpones cargados en Maestros, queda todo igual que
+    // siempre (3 tipos, sin desglose por depósito).
+    const conGalpones = galpones.length > 0;
+    if (conGalpones && !["ingreso", "salida", "devolucion", "movimiento"].includes(this.state.tipo)) {
+      this.state.tipo = "ingreso";
+    }
+
     container.innerHTML = `
       <h2>Insumos</h2>
       <div class="card" id="stockCard"></div>
@@ -61,13 +108,14 @@ const movimientosInsumosView = {
           <button type="button" data-tipo="ingreso">Ingreso</button>
           <button type="button" data-tipo="salida">Salida</button>
           <button type="button" data-tipo="devolucion">Devolución</button>
+          ${conGalpones ? '<button type="button" data-tipo="movimiento">Movimiento</button>' : ""}
         </div>
         <div id="formArea"></div>
       </div>
       <div class="card" id="listaMovs"></div>
     `;
 
-    renderStockCard(container, insumos);
+    renderStockCard(container, insumos, stockPorGalpon);
 
     const tipoToggle = container.querySelector("#tipoToggle");
     tipoToggle.querySelectorAll("button").forEach((btn) => {
@@ -78,13 +126,15 @@ const movimientosInsumosView = {
       });
     });
 
-    const ctx = { insumos, proveedores, contratistas, saldoInsumosPendientes };
+    const ctx = { insumos, proveedores, contratistas, saldoInsumosPendientes, galpones, stockPorGalpon };
     const formArea = container.querySelector("#formArea");
 
     if (this.state.tipo === "ingreso") {
       renderFormIngreso(container, formArea, ctx, () => this.render(container));
     } else if (this.state.tipo === "salida") {
       renderFormSalida(container, formArea, ctx, () => this.render(container));
+    } else if (this.state.tipo === "movimiento") {
+      renderFormMovimiento(container, formArea, ctx, () => this.render(container));
     } else {
       renderFormDevolucion(container, formArea, ctx, () => this.render(container));
     }
@@ -93,17 +143,26 @@ const movimientosInsumosView = {
   },
 };
 
-function renderFormIngreso(container, formArea, { proveedores, insumos }, onSaved) {
+function renderFormIngreso(container, formArea, { proveedores, insumos, galpones }, onSaved) {
   if (proveedores.length === 0) {
     formArea.innerHTML = `<div class="empty-state">Todavía no cargaste ningún <strong>Proveedor</strong>.<br/>Andá a Maestros → Proveedores para cargarlo.</div>`;
     return;
   }
+  const conGalpones = galpones.length > 0;
   formArea.innerHTML = `
     <form id="formMov">
       <div class="field">
         <label>Fecha</label>
         <input type="datetime-local" id="fFecha" value="${nowLocalDatetime()}" required />
       </div>
+      ${
+        conGalpones
+          ? `<div class="field">
+              <label>Galpón</label>
+              <select id="fGalpon" required>${optsGalpones(galpones, "Seleccionar...")}</select>
+            </div>`
+          : ""
+      }
       <div class="field">
         <label>Proveedor</label>
         <select id="fProveedor" required><option value="">Seleccionar...</option>${opts(proveedores)}</select>
@@ -133,9 +192,11 @@ function renderFormIngreso(container, formArea, { proveedores, insumos }, onSave
     e.preventDefault();
     const proveedorId = container.querySelector("#fProveedor").value;
     const insumoId = container.querySelector("#fInsumo").value;
-    if (!proveedorId || !insumoId) return;
+    const galponId = conGalpones ? container.querySelector("#fGalpon").value : "";
+    if (!proveedorId || !insumoId || (conGalpones && !galponId)) return;
     const proveedor = proveedores.find((p) => p.id === proveedorId);
     const insumo = insumos.find((i) => i.id === insumoId);
+    const galpon = galpones.find((g) => g.id === galponId);
     const fotoInput = container.querySelector("#fFoto");
 
     const registro = {
@@ -148,6 +209,8 @@ function renderFormIngreso(container, formArea, { proveedores, insumos }, onSave
       insumoNombre: insumo ? insumo.nombre : "",
       unidad: insumo ? insumo.unidad : "",
       cantidad: parseNumero(container.querySelector("#fCantidad").value),
+      galponId: galponId || null,
+      galponNombre: galpon ? galpon.nombre : "",
       foto: fotoInput.files && fotoInput.files[0] ? fotoInput.files[0] : null,
       observaciones: container.querySelector("#fObs").value.trim(),
       sincronizado: false,
@@ -160,32 +223,48 @@ function renderFormIngreso(container, formArea, { proveedores, insumos }, onSave
   });
 }
 
-function renderFormSalida(container, formArea, { contratistas, insumos }, onSaved) {
+function renderFormSalida(container, formArea, { contratistas, insumos, galpones, stockPorGalpon }, onSaved) {
   if (contratistas.length === 0) {
     formArea.innerHTML = `<div class="empty-state">Todavía no cargaste ningún <strong>Contratista</strong>.<br/>Andá a Maestros → Contratistas para cargarlo.</div>`;
     return;
   }
-  // Solo se ofrecen insumos con stock > 0 — no tiene sentido armar una salida
-  // de algo que ya está en 0. Si igual se saca más de lo que queda (llevando
-  // el stock a negativo), el aviso de abajo lo avisa al confirmar.
-  const insumosConStock = insumos.filter((i) => i.stock > 0);
+  const conGalpones = galpones.length > 0;
+
+  // Sin galpones: mismo criterio de siempre (solo insumos con stock total > 0).
+  // Con galpones: el desplegable de insumo se arma recién al elegir el
+  // galpón, mostrando solo lo que ESE galpón tiene (no tiene sentido sacar
+  // de un depósito algo que no está ahí, aunque sí esté en el otro).
+  const insumosConStockGlobal = insumos.filter((i) => i.stock > 0);
+
   formArea.innerHTML = `
     <form id="formMov">
       <div class="field">
         <label>Fecha</label>
         <input type="datetime-local" id="fFecha" value="${nowLocalDatetime()}" required />
       </div>
+      ${
+        conGalpones
+          ? `<div class="field">
+              <label>Galpón</label>
+              <select id="fGalpon" required>${optsGalpones(galpones, "Seleccionar...")}</select>
+            </div>`
+          : ""
+      }
       <div class="field">
         <label>Contratista</label>
         <select id="fContratista" required><option value="">Seleccionar...</option>${opts(contratistas)}</select>
       </div>
       <div class="field">
         <label>Insumo</label>
-        ${
-          insumosConStock.length === 0
-            ? '<div class="empty-state">No hay insumos con stock disponible para sacar.</div>'
-            : `<select id="fInsumo" required><option value="">Seleccionar...</option>${opts(insumosConStock, { withStock: true })}</select>`
-        }
+        <div id="insumoWrap">
+          ${
+            conGalpones
+              ? '<div class="empty-state">Elegí el galpón arriba...</div>'
+              : insumosConStockGlobal.length === 0
+              ? '<div class="empty-state">No hay insumos con stock disponible para sacar.</div>'
+              : `<select id="fInsumo" required><option value="">Seleccionar...</option>${opts(insumosConStockGlobal, { withStock: true })}</select>`
+          }
+        </div>
       </div>
       <div class="field">
         <label>Cantidad</label>
@@ -199,19 +278,43 @@ function renderFormSalida(container, formArea, { contratistas, insumos }, onSave
     </form>
   `;
 
+  if (conGalpones) {
+    container.querySelector("#fGalpon").addEventListener("change", (e) => {
+      const galponId = e.target.value;
+      const wrap = container.querySelector("#insumoWrap");
+      if (!galponId) {
+        wrap.innerHTML = '<div class="empty-state">Elegí el galpón arriba...</div>';
+        return;
+      }
+      const conStockEnGalpon = stockPorGalpon.insumosConStock.filter((i) => (i.porGalpon[galponId] || 0) > 0);
+      wrap.innerHTML = conStockEnGalpon.length
+        ? `<select id="fInsumo" required><option value="">Seleccionar...</option>${conStockEnGalpon
+            .slice()
+            .sort((a, b) => a.nombre.localeCompare(b.nombre))
+            .map((i) => `<option value="${i.id}">${i.nombre} — stock: ${i.porGalpon[galponId]} ${i.unidad || ""}</option>`)
+            .join("")}</select>`
+        : '<div class="empty-state">Este galpón no tiene stock disponible para sacar.</div>';
+    });
+  }
+
   container.querySelector("#formMov").addEventListener("submit", async (e) => {
     e.preventDefault();
     const contratistaId = container.querySelector("#fContratista").value;
     const insumoId = container.querySelector("#fInsumo")?.value || "";
-    if (!contratistaId || !insumoId) return;
+    const galponId = conGalpones ? container.querySelector("#fGalpon").value : "";
+    if (!contratistaId || !insumoId || (conGalpones && !galponId)) return;
 
     const contratista = contratistas.find((c) => c.id === contratistaId);
     const insumo = insumos.find((i) => i.id === insumoId);
+    const galpon = galpones.find((g) => g.id === galponId);
     const cantidad = parseNumero(container.querySelector("#fCantidad").value);
 
-    if (insumo && cantidad > insumo.stock) {
+    const stockDisponible = conGalpones
+      ? (stockPorGalpon.insumosConStock.find((i) => i.id === insumoId)?.porGalpon[galponId] ?? 0)
+      : insumo?.stock ?? 0;
+    if (cantidad > stockDisponible) {
       const continuar = confirm(
-        `El insumo "${insumo.nombre}" tiene ${insumo.stock} ${insumo.unidad || ""} en stock y estás sacando ${cantidad}.\n¿Confirmás igual?`
+        `El insumo "${insumo.nombre}"${galpon ? ` en "${galpon.nombre}"` : ""} tiene ${stockDisponible} ${insumo.unidad || ""} en stock y estás sacando ${cantidad}.\n¿Confirmás igual?`
       );
       if (!continuar) return;
     }
@@ -226,6 +329,8 @@ function renderFormSalida(container, formArea, { contratistas, insumos }, onSave
       insumoNombre: insumo ? insumo.nombre : "",
       unidad: insumo ? insumo.unidad : "",
       cantidad,
+      galponId: galponId || null,
+      galponNombre: galpon ? galpon.nombre : "",
       observaciones: container.querySelector("#fObs").value.trim(),
       sincronizado: false,
       fechaCreacionRegistro: new Date().toISOString(),
@@ -237,7 +342,7 @@ function renderFormSalida(container, formArea, { contratistas, insumos }, onSave
   });
 }
 
-function renderFormDevolucion(container, formArea, { contratistas, insumos, saldoInsumosPendientes }, onSaved) {
+function renderFormDevolucion(container, formArea, { contratistas, insumos, saldoInsumosPendientes, galpones }, onSaved) {
   if (contratistas.length === 0) {
     formArea.innerHTML = `<div class="empty-state">Todavía no cargaste ningún <strong>Contratista</strong>.<br/>Andá a Maestros → Contratistas para cargarlo.</div>`;
     return;
@@ -246,12 +351,21 @@ function renderFormDevolucion(container, formArea, { contratistas, insumos, sald
     formArea.innerHTML = `<div class="empty-state">No hay insumos con saldo pendiente de devolver.<br/>Se genera saldo al registrar una Salida.</div>`;
     return;
   }
+  const conGalpones = galpones.length > 0;
   formArea.innerHTML = `
     <form id="formMov">
       <div class="field">
         <label>Fecha</label>
         <input type="datetime-local" id="fFecha" value="${nowLocalDatetime()}" required />
       </div>
+      ${
+        conGalpones
+          ? `<div class="field">
+              <label>Galpón (a dónde vuelve)</label>
+              <select id="fGalpon" required>${optsGalpones(galpones, "Seleccionar...")}</select>
+            </div>`
+          : ""
+      }
       <div class="field">
         <label>Contratista</label>
         <select id="fContratista" required><option value="">Seleccionar...</option>${opts(contratistas)}</select>
@@ -283,10 +397,12 @@ function renderFormDevolucion(container, formArea, { contratistas, insumos, sald
     e.preventDefault();
     const contratistaId = container.querySelector("#fContratista").value;
     const insumoId = container.querySelector("#fInsumo").value;
-    if (!contratistaId || !insumoId) return;
+    const galponId = conGalpones ? container.querySelector("#fGalpon").value : "";
+    if (!contratistaId || !insumoId || (conGalpones && !galponId)) return;
 
     const contratista = contratistas.find((c) => c.id === contratistaId);
     const insumo = insumos.find((i) => i.id === insumoId);
+    const galpon = galpones.find((g) => g.id === galponId);
     const cantidad = parseNumero(container.querySelector("#fCantidad").value);
     const saldo = saldoInsumosPendientes.find((s) => s.id === insumoId);
 
@@ -307,6 +423,8 @@ function renderFormDevolucion(container, formArea, { contratistas, insumos, sald
       insumoNombre: insumo ? insumo.nombre : "",
       unidad: insumo ? insumo.unidad : "",
       cantidad,
+      galponId: galponId || null,
+      galponNombre: galpon ? galpon.nombre : "",
       observaciones: container.querySelector("#fObs").value.trim(),
       sincronizado: false,
       fechaCreacionRegistro: new Date().toISOString(),
@@ -314,6 +432,154 @@ function renderFormDevolucion(container, formArea, { contratistas, insumos, sald
     await dbPut(STORE, registro);
     window.dispatchEvent(new Event("appcampo-sync-now"));
     toast("Devolución registrada.");
+    onSaved();
+  });
+}
+
+// "Movimiento" no afecta la cuenta de ningún contratista ni ninguna orden de
+// trabajo (por diseño: getCuentaContratistas y getOrdenesConEstado no leen
+// este tipo) — es puramente interno entre depósitos. Dos sub-tipos:
+// "Transferencia" mueve stock de un galpón a otro sin cambiar el total, y
+// "Ajuste por diferencia" suma o resta al total de un solo galpón puntual
+// (ej. una diferencia de inventario).
+function renderFormMovimiento(container, formArea, { insumos, galpones, stockPorGalpon }, onSaved) {
+  formArea.innerHTML = `
+    <form id="formMov">
+      <div class="field">
+        <label>Fecha</label>
+        <input type="datetime-local" id="fFecha" value="${nowLocalDatetime()}" required />
+      </div>
+      <div class="field">
+        <label>Tipo</label>
+        <select id="fSubtipo">
+          <option value="transferencia">Transferencia entre galpones</option>
+          <option value="ajuste">Ajuste por diferencia</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Insumo</label>
+        <select id="fInsumo" required><option value="">Seleccionar...</option>${opts(insumos)}</select>
+      </div>
+      <div id="camposTransferencia">
+        <div class="field">
+          <label>Galpón origen</label>
+          <select id="fGalponOrigen" required>${optsGalpones(galpones, "Seleccionar...")}</select>
+        </div>
+        <div class="field">
+          <label>Galpón destino</label>
+          <select id="fGalponDestino" required>${optsGalpones(galpones, "Seleccionar...")}</select>
+        </div>
+      </div>
+      <div id="camposAjuste" class="hidden">
+        <div class="field">
+          <label>Galpón</label>
+          <select id="fGalponAjuste">${optsGalpones(galpones, "Seleccionar...")}</select>
+        </div>
+        <div class="field">
+          <label>Tipo de diferencia</label>
+          <select id="fTipoDiferencia">
+            <option value="sobra">Sobra (+)</option>
+            <option value="falta">Falta (−)</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>Cantidad</label>
+        <input type="text" inputmode="decimal" id="fCantidad" required />
+      </div>
+      <div class="field">
+        <label>Observaciones</label>
+        <textarea id="fObs"></textarea>
+      </div>
+      <button type="submit">Guardar movimiento</button>
+    </form>
+  `;
+
+  const fSubtipo = container.querySelector("#fSubtipo");
+  const camposTransferencia = container.querySelector("#camposTransferencia");
+  const camposAjuste = container.querySelector("#camposAjuste");
+  const fGalponOrigen = container.querySelector("#fGalponOrigen");
+  const fGalponDestino = container.querySelector("#fGalponDestino");
+  const fGalponAjuste = container.querySelector("#fGalponAjuste");
+
+  fSubtipo.addEventListener("change", () => {
+    const esTransferencia = fSubtipo.value === "transferencia";
+    camposTransferencia.classList.toggle("hidden", !esTransferencia);
+    camposAjuste.classList.toggle("hidden", esTransferencia);
+    fGalponOrigen.required = esTransferencia;
+    fGalponDestino.required = esTransferencia;
+  });
+
+  container.querySelector("#formMov").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const insumoId = container.querySelector("#fInsumo").value;
+    const cantidad = parseNumero(container.querySelector("#fCantidad").value);
+    if (!insumoId || cantidad <= 0) return;
+    const insumo = insumos.find((i) => i.id === insumoId);
+    const subtipo = fSubtipo.value;
+    const fecha = container.querySelector("#fFecha").value;
+    const observaciones = container.querySelector("#fObs").value.trim();
+
+    let registro;
+    if (subtipo === "transferencia") {
+      const origenId = fGalponOrigen.value;
+      const destinoId = fGalponDestino.value;
+      if (!origenId || !destinoId) return;
+      if (origenId === destinoId) {
+        alert("El galpón de origen y destino no pueden ser el mismo.");
+        return;
+      }
+      const origen = galpones.find((g) => g.id === origenId);
+      const destino = galpones.find((g) => g.id === destinoId);
+      const stockEnOrigen = stockPorGalpon.insumosConStock.find((i) => i.id === insumoId)?.porGalpon[origenId] ?? 0;
+      if (cantidad > stockEnOrigen) {
+        const continuar = confirm(
+          `El insumo "${insumo.nombre}" tiene ${stockEnOrigen} ${insumo.unidad || ""} en "${origen.nombre}" y estás transfiriendo ${cantidad}.\n¿Confirmás igual?`
+        );
+        if (!continuar) return;
+      }
+      registro = {
+        id: uid(),
+        tipo: "movimiento",
+        subtipoMovimiento: "transferencia",
+        fecha,
+        insumoId,
+        insumoNombre: insumo ? insumo.nombre : "",
+        unidad: insumo ? insumo.unidad : "",
+        cantidad,
+        galponId: origenId,
+        galponNombre: origen ? origen.nombre : "",
+        galponDestinoId: destinoId,
+        galponDestinoNombre: destino ? destino.nombre : "",
+        observaciones,
+        sincronizado: false,
+        fechaCreacionRegistro: new Date().toISOString(),
+      };
+    } else {
+      const galponId = fGalponAjuste.value;
+      if (!galponId) return;
+      const galpon = galpones.find((g) => g.id === galponId);
+      registro = {
+        id: uid(),
+        tipo: "movimiento",
+        subtipoMovimiento: "ajuste",
+        fecha,
+        insumoId,
+        insumoNombre: insumo ? insumo.nombre : "",
+        unidad: insumo ? insumo.unidad : "",
+        cantidad,
+        tipoDiferencia: container.querySelector("#fTipoDiferencia").value,
+        galponId,
+        galponNombre: galpon ? galpon.nombre : "",
+        observaciones,
+        sincronizado: false,
+        fechaCreacionRegistro: new Date().toISOString(),
+      };
+    }
+
+    await dbPut(STORE, registro);
+    window.dispatchEvent(new Event("appcampo-sync-now"));
+    toast("Movimiento registrado.");
     onSaved();
   });
 }
@@ -326,13 +592,18 @@ async function renderListadoMovs(container) {
     return;
   }
   lista.innerHTML = `<h2 style="margin-top:0;">Últimos movimientos</h2>`;
-  const etiquetas = { ingreso: "Ingreso", salida: "Salida", devolucion: "Devolución" };
+  const etiquetas = { ingreso: "Ingreso", salida: "Salida", devolucion: "Devolución", movimiento: "Movimiento" };
   for (const m of movs) {
     const row = document.createElement("div");
     row.className = "list-item";
     let detalle = "";
-    if (m.tipo === "ingreso") detalle = `de ${m.proveedorNombre}`;
-    else detalle = m.contratistaNombre || "";
+    if (m.tipo === "ingreso") detalle = `${m.galponNombre ? m.galponNombre + " · " : ""}de ${m.proveedorNombre}`;
+    else if (m.tipo === "movimiento") {
+      detalle =
+        m.subtipoMovimiento === "transferencia"
+          ? `${m.galponNombre} → ${m.galponDestinoNombre}`
+          : `Ajuste en ${m.galponNombre} (${m.tipoDiferencia === "falta" ? "falta" : "sobra"})`;
+    } else detalle = `${m.galponNombre ? m.galponNombre + " · " : ""}${m.contratistaNombre || ""}`;
     const fotoTxt = m.fotoUrl
       ? ` · <a href="${m.fotoUrl}" target="_blank" rel="noopener">Ver foto</a>`
       : m.foto

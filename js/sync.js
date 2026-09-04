@@ -164,6 +164,7 @@ const MAESTROS_CAMPOS = {
   contratistas: ["nombre"],
   insumos: ["nombre", "unidad"],
   campanias: ["nombre", "activa"],
+  galpones: ["nombre"],
 };
 
 const MAESTROS_ETIQUETAS = {
@@ -175,6 +176,7 @@ const MAESTROS_ETIQUETAS = {
   silosBolsa: "Silos Bolsa",
   campanias: "Campañas",
   planSiembra: "Plan de Siembra",
+  galpones: "Galpones",
 };
 
 async function importarMaestros() {
@@ -421,6 +423,11 @@ async function unflattenCarga(fila) {
 
 async function unflattenMovimiento(fila) {
   const insumoId = await resolverIdPorNombre("insumos", fila.insumoNombre, { unidad: fila.unidad || "" });
+  // galponNombre solo tiene sentido en empresas que manejan más de un
+  // depósito — en el resto viene vacío y queda null, sin efecto (ver
+  // getStockPorGalpon en stockUtils.js, que devuelve null si no hay
+  // ningún galpón cargado en Maestros).
+  const galponId = fila.galponNombre ? await resolverIdPorNombre("galpones", fila.galponNombre) : null;
   const base = {
     id: fila.id,
     tipo: fila.tipo,
@@ -430,12 +437,28 @@ async function unflattenMovimiento(fila) {
     unidad: fila.unidad || "",
     cantidad: parseFloat(fila.cantidad) || 0,
     observaciones: fila.observaciones || "",
+    galponId,
+    galponNombre: String(fila.galponNombre || "").trim(),
     sincronizado: true,
     fechaCreacionRegistro: fila.fechaCreacionRegistro || new Date().toISOString(),
   };
   if (fila.tipo === "ingreso") {
     const proveedorId = await resolverIdPorNombre("proveedores", fila.proveedorNombre);
     return { ...base, proveedorId, proveedorNombre: String(fila.proveedorNombre || "").trim(), foto: null };
+  }
+  // "movimiento": transferencia entre galpones o ajuste por diferencia (ver
+  // Insumos → Movimiento) — nunca afecta la cuenta de un contratista ni
+  // ninguna orden de trabajo, por diseño (getCuentaContratistas y
+  // getOrdenesConEstado no leen este tipo).
+  if (fila.tipo === "movimiento") {
+    const galponDestinoId = fila.galponDestinoNombre ? await resolverIdPorNombre("galpones", fila.galponDestinoNombre) : null;
+    return {
+      ...base,
+      subtipoMovimiento: fila.subtipoMovimiento || "",
+      galponDestinoId,
+      galponDestinoNombre: String(fila.galponDestinoNombre || "").trim(),
+      tipoDiferencia: fila.tipoDiferencia || "",
+    };
   }
   // salida y devolución: ambas llevan contratista directo — ya no pasan por
   // una orden de trabajo (se sacó ese campo de Insumos → Salida/Devolución).

@@ -80,8 +80,49 @@ async function getInsumosConStock() {
     const ingresos = movs.filter((m) => m.tipo === "ingreso" && m.insumoId === i.id).reduce((s, m) => s + m.cantidad, 0);
     const salidas = movs.filter((m) => m.tipo === "salida" && m.insumoId === i.id).reduce((s, m) => s + m.cantidad, 0);
     const devoluciones = movs.filter((m) => m.tipo === "devolucion" && m.insumoId === i.id).reduce((s, m) => s + m.cantidad, 0);
-    return { ...i, ingresos, salidas, devoluciones, stock: ingresos - salidas + devoluciones };
+    // Ajustes por diferencia (Movimiento → Ajuste) suman o restan al total según
+    // tipoDiferencia. Las transferencias entre galpones NO entran acá: son
+    // neutras a nivel total (salen de un galpón y entran a otro), solo mueven
+    // stock adentro de getStockPorGalpon().
+    const ajustes = movs
+      .filter((m) => m.tipo === "movimiento" && m.subtipoMovimiento === "ajuste" && m.insumoId === i.id)
+      .reduce((s, m) => s + (m.tipoDiferencia === "falta" ? -m.cantidad : m.cantidad), 0);
+    return { ...i, ingresos, salidas, devoluciones, ajustes, stock: ingresos - salidas + devoluciones + ajustes };
   });
+}
+
+// Stock de cada insumo desglosado por galpón + total, para empresas que
+// manejan más de un depósito (ver Insumos → "Movimiento" para transferir
+// entre galpones o ajustar por diferencia). Devuelve null si la empresa no
+// tiene ningún galpón cargado en Maestros — en ese caso Insumos se comporta
+// exactamente como antes (un solo pool de stock, sin desglose).
+async function getStockPorGalpon() {
+  const [insumos, galpones, movs] = await Promise.all([
+    dbGetAll("insumos"),
+    dbGetAll("galpones"),
+    dbGetAll("movimientosInsumos"),
+  ]);
+  if (galpones.length === 0) return null;
+  const galponesOrdenados = galpones.slice().sort((a, b) => a.nombre.localeCompare(b.nombre));
+  const insumosConStock = insumos.map((i) => {
+    const porGalpon = {};
+    galponesOrdenados.forEach((g) => (porGalpon[g.id] = 0));
+    for (const m of movs) {
+      if (m.insumoId !== i.id) continue;
+      if (m.tipo === "ingreso" && m.galponId in porGalpon) porGalpon[m.galponId] += m.cantidad;
+      else if (m.tipo === "salida" && m.galponId in porGalpon) porGalpon[m.galponId] -= m.cantidad;
+      else if (m.tipo === "devolucion" && m.galponId in porGalpon) porGalpon[m.galponId] += m.cantidad;
+      else if (m.tipo === "movimiento" && m.subtipoMovimiento === "transferencia") {
+        if (m.galponId in porGalpon) porGalpon[m.galponId] -= m.cantidad;
+        if (m.galponDestinoId in porGalpon) porGalpon[m.galponDestinoId] += m.cantidad;
+      } else if (m.tipo === "movimiento" && m.subtipoMovimiento === "ajuste" && m.galponId in porGalpon) {
+        porGalpon[m.galponId] += m.tipoDiferencia === "falta" ? -m.cantidad : m.cantidad;
+      }
+    }
+    const total = Object.values(porGalpon).reduce((s, v) => s + v, 0);
+    return { ...i, porGalpon, total };
+  });
+  return { galpones: galponesOrdenados, insumosConStock };
 }
 
 // Saldo global de cada insumo que salió (a cualquier contratista) y todavía
@@ -236,6 +277,7 @@ export {
   agruparSilosPorNombreCultivo,
   getStockGranosPorCultivo,
   getInsumosConStock,
+  getStockPorGalpon,
   getSaldoInsumosPendientes,
   getCuentaContratistas,
   getAvancePlanes,
