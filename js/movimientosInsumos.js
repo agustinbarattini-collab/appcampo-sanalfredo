@@ -1,13 +1,11 @@
 import { dbGetAll, dbPut, dbDelete, uid } from "./db.js";
 import { getInsumosConStock, getStockPorGalpon, getSaldoInsumosPendientes } from "./stockUtils.js";
-import { toast, parseNumero } from "./ui.js";
+import { toast, parseNumero, formatearFechaCorta } from "./ui.js";
 
 const STORE = "movimientosInsumos";
 
-function nowLocalDatetime() {
-  const d = new Date();
-  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-  return d.toISOString().slice(0, 16);
+function today() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 function opts(list, { withStock } = {}) {
@@ -153,7 +151,7 @@ function renderFormIngreso(container, formArea, { proveedores, insumos, galpones
     <form id="formMov">
       <div class="field">
         <label>Fecha</label>
-        <input type="datetime-local" id="fFecha" value="${nowLocalDatetime()}" required />
+        <input type="date" id="fFecha" value="${today()}" required />
       </div>
       ${
         conGalpones
@@ -240,7 +238,7 @@ function renderFormSalida(container, formArea, { contratistas, insumos, galpones
     <form id="formMov">
       <div class="field">
         <label>Fecha</label>
-        <input type="datetime-local" id="fFecha" value="${nowLocalDatetime()}" required />
+        <input type="date" id="fFecha" value="${today()}" required />
       </div>
       ${
         conGalpones
@@ -356,7 +354,7 @@ function renderFormDevolucion(container, formArea, { contratistas, insumos, sald
     <form id="formMov">
       <div class="field">
         <label>Fecha</label>
-        <input type="datetime-local" id="fFecha" value="${nowLocalDatetime()}" required />
+        <input type="date" id="fFecha" value="${today()}" required />
       </div>
       ${
         conGalpones
@@ -447,7 +445,7 @@ function renderFormMovimiento(container, formArea, { insumos, galpones, stockPor
     <form id="formMov">
       <div class="field">
         <label>Fecha</label>
-        <input type="datetime-local" id="fFecha" value="${nowLocalDatetime()}" required />
+        <input type="date" id="fFecha" value="${today()}" required />
       </div>
       <div class="field">
         <label>Tipo</label>
@@ -612,7 +610,7 @@ async function renderListadoMovs(container) {
     row.innerHTML = `
       <div>
         <div><span class="pill">${etiquetas[m.tipo]}</span> <strong>${m.insumoNombre}</strong> — ${m.cantidad} ${m.unidad || ""}</div>
-        <div class="muted">${m.fecha?.replace("T", " ")} · ${detalle}${fotoTxt}</div>
+        <div class="muted">${formatearFechaCorta(m.fecha)} · ${detalle}${fotoTxt}</div>
       </div>
       <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
         <span class="pill ${m.sincronizado ? "sincronizado" : "pendiente"}">${m.sincronizado ? "Sincronizado" : "Pendiente"}</span>

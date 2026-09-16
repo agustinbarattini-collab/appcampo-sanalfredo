@@ -1,14 +1,12 @@
 import { dbGetAll, dbGet, dbPut, dbDelete, uid } from "./db.js";
 import { getSilosBolsaConStock, getStockGranosPorCultivo, agruparSilosPorNombreCultivo } from "./stockUtils.js";
-import { parseNumero } from "./ui.js";
+import { parseNumero, formatearFechaCorta } from "./ui.js";
 
 const STORE = "cargasGranos";
 const STORE_AJUSTES = "ajustesSiloBolsa";
 
-function nowLocalDatetime() {
-  const d = new Date();
-  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-  return d.toISOString().slice(0, 16);
+function today() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 async function poblarOrigenSelect(select, tipo) {
@@ -149,8 +147,8 @@ const cargaGranosView = {
           </div>
 
           <div class="field">
-            <label>Fecha y hora</label>
-            <input type="datetime-local" id="fFecha" value="${nowLocalDatetime()}" required />
+            <label>Fecha</label>
+            <input type="date" id="fFecha" value="${today()}" required />
           </div>
 
           <div class="field">
@@ -539,7 +537,7 @@ async function renderListadoCargas(container, campaniaActiva) {
     row.innerHTML = `
       <div>
         <div>${origenTxt} → ${c.corredorNombre}</div>
-        <div class="muted">${c.fecha?.replace("T", " ")} · Campaña ${campaniaTxt} · ${c.cultivo} · ${kgTxt}${fotoTxt}</div>
+        <div class="muted">${formatearFechaCorta(c.fecha)} · Campaña ${campaniaTxt} · ${c.cultivo} · ${kgTxt}${fotoTxt}</div>
       </div>
       <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
         <span class="pill ${c.sincronizado ? "sincronizado" : "pendiente"}">${c.sincronizado ? "Sincronizado" : "Pendiente"}</span>
