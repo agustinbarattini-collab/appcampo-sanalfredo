@@ -19,7 +19,11 @@ function agruparSilosPorNombreCultivo(silos) {
 }
 
 async function getSilosBolsaConStock() {
-  const [silos, cargas] = await Promise.all([dbGetAll("silosBolsa"), dbGetAll("cargasGranos")]);
+  const [silos, cargas, ajustes] = await Promise.all([
+    dbGetAll("silosBolsa"),
+    dbGetAll("cargasGranos"),
+    dbGetAll("ajustesSiloBolsa"),
+  ]);
 
   return agruparSilosPorNombreCultivo(silos).map((miembros) => {
     // Representante estable de cara a la UI (el origen que se guarda en la
@@ -41,9 +45,22 @@ async function getSilosBolsaConStock() {
     const kgTotalInicial = miembros.reduce((sum, m) => sum + (m.kgTotalInicial || 0), 0);
     // Un silo finalizado queda en 0 aunque el cálculo teórico diera otro número
     // (la diferencia real ya quedó registrada como ajuste al finalizarlo).
-    // El grupo entero se considera finalizado recién cuando TODOS sus
-    // miembros lo están (ver finalizarSiloBolsa, que los finaliza a la vez).
-    const finalizado = miembros.every((m) => m.finalizado);
+    // "finalizado" en el propio maestro es un flag LOCAL nada más (la pestaña
+    // "Maestros - Silos Bolsa" no tiene esa columna, así que nunca viaja a la
+    // Sheet) — un celular que sincroniza por primera vez o después de un
+    // reset nunca se entera de que otro celular ya cerró ese silo, y sin
+    // esto el cálculo volvía a tratarlo como activo (mostrando la diferencia
+    // como si fuera stock disponible). El Ajuste sí sincroniza siempre entre
+    // todos los dispositivos, así que un ajuste que coincida en
+    // nombre+cultivo+campaña es la señal confiable de que el grupo ya cerró,
+    // la haya finalizado el celular que sea.
+    const finalizadoPorAjuste = ajustes.some(
+      (a) =>
+        a.siloBolsaNombre.trim().toLowerCase() === representante.nombre.trim().toLowerCase() &&
+        (a.cultivo || "").trim().toLowerCase() === (representante.cultivo || "").trim().toLowerCase() &&
+        (a.campaniaId || null) === (representante.campaniaId || null)
+    );
+    const finalizado = finalizadoPorAjuste || miembros.every((m) => m.finalizado);
     const kgResidual = finalizado ? 0 : Math.max(0, kgTotalInicial - usado);
 
     return {
