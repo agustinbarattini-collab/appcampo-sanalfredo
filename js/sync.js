@@ -270,10 +270,22 @@ async function importarMaestros() {
     resumen[MAESTROS_ETIQUETAS.silosBolsa] = { nuevos, actualizados };
   }
 
-  // Plan de Siembra: clave compuesta (loteNombre + cultivo + campañaNombre), no un "nombre" único.
+  // Plan de Siembra: clave compuesta (loteNombre + cultivo + campañaNombre),
+  // no un "nombre" único — un mismo lote puede tener más de un plan en la
+  // misma campaña (doble cultivo, ej. Trigo y después Soja 2da).
   {
     const filas = data.maestros.planSiembra || [];
     const existentes = await dbGetAll("planSiembra");
+    // Si alguien corrige a mano el cultivo de un plan ya cargado (ej. "Maiz"
+    // por "Maiz Tardio" para el mismo lote), el cultivo es parte de la clave
+    // de búsqueda de arriba — sin esto, la fila corregida no matchea a la
+    // vieja y queda un plan "Maiz" suelto sin ningún avance, además del
+    // nuevo "Maiz Tardio". Para distinguir "es una corrección" de "es
+    // realmente un segundo cultivo nuevo" se mira si YA hay actividad real
+    // cargada (un Avance o un Cierre) contra ese plan: si no hay ninguna,
+    // es seguro asumir que es el mismo plan renombrado.
+    const [avances, cierres] = await Promise.all([dbGetAll("avanceSiembra"), dbGetAll("cierresSiembra")]);
+    const planesConActividad = new Set([...avances.map((a) => a.planId), ...cierres.map((c) => c.planId)]);
     let nuevos = 0;
     let actualizados = 0;
     for (const fila of filas) {
@@ -283,12 +295,25 @@ async function importarMaestros() {
       if (!loteNombre || !cultivo) continue;
       const loteId = await resolverIdPorNombre("lotes", loteNombre);
       const campaniaId = campaniaNombre ? await resolverIdPorNombre("campanias", campaniaNombre, { activa: false }) : null;
-      const existente = existentes.find(
+      let existente = existentes.find(
         (p) => p.loteId === loteId && p.cultivo.trim().toLowerCase() === cultivo.toLowerCase() && (p.campaniaId || null) === campaniaId
       );
+      if (!existente) {
+        const candidatos = existentes.filter(
+          (p) => p.loteId === loteId && (p.campaniaId || null) === campaniaId && !planesConActividad.has(p.id)
+        );
+        // Solo se toma como corrección si hay exactamente un candidato sin
+        // actividad — con más de uno no hay forma confiable de saber cuál
+        // corregir, así que en ese caso se crea uno nuevo (más seguro que
+        // adivinar mal).
+        if (candidatos.length === 1) existente = candidatos[0];
+      }
       const record = existente
         ? { ...existente }
         : { id: uid(), loteId, loteNombre, cultivo, campaniaId, campaniaNombre };
+      record.loteNombre = loteNombre;
+      record.cultivo = cultivo;
+      record.campaniaNombre = campaniaNombre;
       record.superficieTeorica = parseFloat(fila.superficieTeorica) || 0;
       await dbPut("planSiembra", record);
       if (existente) actualizados++;
