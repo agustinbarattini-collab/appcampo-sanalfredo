@@ -137,6 +137,31 @@ async function syncNow() {
 
 window.addEventListener("appcampo-sync-now", syncNow);
 
+// El reset remoto (ver verificarResetRemoto arriba) solo se revisaba al abrir
+// la app de cero o al reconectarse a internet — si alguien la deja abierta en
+// el navegador sin recargarla, podia tardar en enterarse de un "Forzar reset"
+// hecho desde la Sheet. Esta version chequea SOLO eso (sube lo pendiente y
+// mira si hay que resetear) sin traer registros de otros dispositivos ni
+// redibujar la pantalla — asi no le pisa un formulario a medio llenar a
+// quien la tenga abierta. Si el reset SI se dispara, la recarga que sigue ya
+// se encarga de "limpiar" cualquier formulario a medio llenar, pero eso es
+// una accion explicita y poco frecuente (alguien la pidio desde la Sheet),
+// no algo que pase de la nada.
+async function verificarResetEnSegundoPlano() {
+  if (!navigator.onLine) return;
+  await syncAll();
+  const resultadoMaestros = await importarMaestros();
+  if (await verificarResetRemoto(resultadoMaestros.resetVersion || 0)) {
+    location.reload();
+  }
+}
+
+// Cada vez que la app vuelve a primer plano (el usuario cambia de app y
+// vuelve, por ejemplo) y, por las dudas, cada 15 minutos mientras se queda
+// abierta sin que nadie la minimice ni la recargue.
+const INTERVALO_VERIFICAR_RESET_MS = 15 * 60 * 1000;
+setInterval(verificarResetEnSegundoPlano, INTERVALO_VERIFICAR_RESET_MS);
+
 // Evita que dos llamadas a router() se pisen entre sí (por ejemplo, el render
 // inicial de la app y el que dispara runSync() al terminar de sincronizar):
 // sin esto, un render a medio terminar puede terminar enganchando sus
@@ -212,10 +237,14 @@ window.addEventListener("DOMContentLoaded", () => {
     navigator.serviceWorker
       .register("./service-worker.js")
       .then((reg) => {
-        // Revisa si hay una versión nueva publicada cada vez que la app
-        // vuelve a primer plano (no solo al abrirla desde cero).
+        // Revisa si hay una versión nueva publicada, y si hace falta un
+        // reset remoto, cada vez que la app vuelve a primer plano (no solo
+        // al abrirla desde cero).
         document.addEventListener("visibilitychange", () => {
-          if (document.visibilityState === "visible") reg.update();
+          if (document.visibilityState === "visible") {
+            reg.update();
+            verificarResetEnSegundoPlano();
+          }
         });
       })
       .catch((err) => {
