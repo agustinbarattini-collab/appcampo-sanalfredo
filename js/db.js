@@ -95,22 +95,25 @@ async function dbDelete(storeName, id) {
   });
 }
 
-// Borra la base local entera (todas las pestañas) para forzar una
-// resincronización de cero desde la Sheet — ver APP_CONFIG.resetVersion en
-// config.js. Cierra la conexión abierta antes de borrar (si no, el borrado
-// queda "blocked" indefinidamente) y limpia dbPromise para que la próxima
-// llamada a openDb() abra una base nueva en vez de reusar la cerrada.
+// Vacía todas las tablas locales para forzar una resincronización de cero
+// desde la Sheet — ver verificarResetRemoto() en app.js. NO usa
+// indexedDB.deleteDatabase(): si la app está abierta en otra pestaña o
+// ventana a la vez (pasa seguido en el celular, ej. el ícono instalado más
+// una pestaña de Chrome), ese borrado queda "bloqueado" por la otra
+// conexión, la promesa volvía igual como si hubiera terminado, la app marcaba
+// el reset como hecho y nunca lo reintentaba — con los datos viejos todavía
+// ahí. Vaciar las tablas con una transacción no depende de que las demás
+// conexiones se cierren, y si falla rechaza la promesa (así el reset no se
+// marca como hecho y se reintenta en la próxima revisión).
 async function borrarTodoLocal() {
   const db = await openDb();
-  db.close();
-  dbPromise = null;
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.deleteDatabase(DB_NAME);
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
-    // No debería bloquearse (recién cerramos la única conexión abierta),
-    // pero por las dudas no lo dejamos colgado esperando para siempre.
-    req.onblocked = () => resolve();
+  const tablas = Array.from(db.objectStoreNames);
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(tablas, "readwrite");
+    tablas.forEach((nombre) => tx.objectStore(nombre).clear());
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
   });
 }
 
