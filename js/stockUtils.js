@@ -229,7 +229,7 @@ async function getOrdenesConEstado() {
   ]);
   const hoy = today();
   return ordenes
-    .filter((o) => (o.lotes || []).length > 0)
+    .filter((o) => !o.anulada && (o.lotes || []).length > 0)
     .map((o) => {
       const aplicacionesOrden = aplicaciones.filter((a) => a.ordenTrabajoId === o.id);
       const lotesAplicadosIds = new Set(aplicacionesOrden.map((a) => a.loteId));

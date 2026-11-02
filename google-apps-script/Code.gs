@@ -122,6 +122,10 @@ const SHEETS = {
       "producto5Nombre", "producto5DosisPorHa", "producto5Unidad",
       "producto6Nombre", "producto6DosisPorHa", "producto6Unidad",
       "observaciones", "id", "fechaCreacion", "fechaCreacionRegistro", "fechaSincronizacion",
+      // Va al final para no correr de lugar los datos ya cargados. "Anulada"
+      // cancela la orden sin borrar la fila (borrarla no la saca de los
+      // celulares); vacío o "Activa" la deja vigente.
+      "estado",
     ],
   },
 };
@@ -364,6 +368,14 @@ function aplicarValidacionOrdenesTrabajo() {
         if (col > 0) hoja.getRange(2, col, FILAS, 1).setDataValidation(reglaUnidad);
       }
     }
+  }
+
+  // Estado: "Activa" o "Anulada". Una orden anulada deja de verse como
+  // pendiente en todos los celulares la próxima vez que sincronizan.
+  const colEstado = colDe("estado");
+  if (colEstado > 0) {
+    const reglaEstado = SpreadsheetApp.newDataValidation().requireValueInList(["Activa", "Anulada"], true).setAllowInvalid(false).build();
+    hoja.getRange(2, colEstado, FILAS, 1).setDataValidation(reglaEstado);
   }
 
   // Columnas que llena el sistema, no el asesor — se pintan de gris para
@@ -644,12 +656,16 @@ function responderRegistros() {
 function leerPestana(sheet, headers) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return [];
-  const values = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
+  // Una columna agregada al final después de armar la pestaña (ej. "estado")
+  // puede no existir todavía en la Sheet hasta correr setup(); se lee solo lo
+  // que hay y el resto queda vacío, en vez de fallar toda la lectura.
+  const columnas = Math.min(headers.length, sheet.getLastColumn());
+  const values = sheet.getRange(2, 1, lastRow - 1, columnas).getValues();
   return values
     .filter(function (row) { return String(row[0]).trim() !== ""; })
     .map(function (row) {
       const obj = {};
-      headers.forEach(function (h, i) { obj[h] = row[i]; });
+      headers.forEach(function (h, i) { obj[h] = i < row.length ? row[i] : ""; });
       return obj;
     });
 }

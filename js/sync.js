@@ -73,9 +73,19 @@ function flattenOrdenTrabajo(r) {
     out[`producto${i + 1}DosisPorHa`] = p.dosisPorHa;
     out[`producto${i + 1}Unidad`] = p.unidad;
   });
+  out.estado = r.anulada ? "Anulada" : "";
+  out.anulada = undefined;
   out.lotes = undefined;
   out.productosPlanificados = undefined;
   return out;
+}
+
+// Columna "estado" de la pestaña Órdenes de Trabajo: el asesor escribe
+// "Anulada" para cancelar una orden sin borrar la fila (borrarla no la saca
+// de los celulares, la sincronización nunca borra lo ya descargado).
+function estaAnulada(estado) {
+  const e = String(estado || "").trim().toLowerCase();
+  return e.startsWith("anul") || e.startsWith("cancel");
 }
 
 const TIPOS = [
@@ -640,6 +650,7 @@ async function unflattenOrdenTrabajo(fila) {
     has: parseFloat(fila.has) || 0,
     productosPlanificados,
     observaciones: fila.observaciones || "",
+    anulada: estaAnulada(fila.estado),
     fechaCreacion: fila.fechaCreacion || new Date().toISOString(),
     sincronizado: true,
     fechaCreacionRegistro: fila.fechaCreacionRegistro || new Date().toISOString(),
