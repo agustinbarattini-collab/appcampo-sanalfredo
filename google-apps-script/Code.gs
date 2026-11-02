@@ -5,7 +5,7 @@
  */
 
 // Reemplazar por un texto random propio (no hace falta recordarlo, solo copiarlo a config.js).
-const SHARED_SECRET = "REEMPLAZAR_CON_UN_TOKEN_SECRETO";
+const SHARED_SECRET = "SAA2026";
 
 // Nombre de la empresa: se usa para armar la carpeta de Drive donde se guardan
 // las fotos (ver guardarFotoEnDrive), para que quede clara la separación entre
