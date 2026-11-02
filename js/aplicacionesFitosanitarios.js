@@ -60,6 +60,18 @@ function optsConPendiente(cuenta, contratistaId) {
     .join("");
 }
 
+// Todos los demás insumos del maestro (sin importar si tienen stock o
+// pendiente), para poder cargar un producto distinto al planificado o al
+// retirado. Se muestran aparte, debajo de los sugeridos.
+function optsOtrosInsumos(insumos, idsExcluidos) {
+  const otros = insumos
+    .filter((i) => !idsExcluidos.has(i.id))
+    .sort((a, b) => a.nombre.localeCompare(b.nombre))
+    .map((i) => `<option value="${i.id}">${i.nombre}</option>`)
+    .join("");
+  return otros ? `<optgroup label="Otros productos">${otros}</optgroup>` : "";
+}
+
 // Solo se ofrecen las órdenes no completadas — una vez que están todos los
 // lotes aplicados no tiene sentido seguir eligiéndolas acá.
 function optsOrdenes(ordenesConEstado) {
@@ -164,26 +176,34 @@ const aplicacionesFitosanitariosView = {
       return id ? ordenesConEstado.find((o) => o.id === id) : null;
     }
 
-    // Sin orden: mismo comportamiento de siempre (solo ofrece lo que el
-    // contratista tiene pendiente). Con una orden elegida: ofrece los
-    // productos PLANIFICADOS de esa orden (con su dosis/ha de referencia),
-    // no el stock pendiente — la orden puede incluir algo que el contratista
-    // todavía no retiró por Insumos.
+    // Sin orden: primero lo que el contratista tiene pendiente y después
+    // "Otros productos" (cualquier insumo, aunque no tenga stock). Con una
+    // orden elegida: primero los productos PLANIFICADOS de esa orden (con su
+    // dosis/ha de referencia) y después "Otros productos", para poder usar uno
+    // distinto al planificado. En ambos casos el producto no tiene que tener
+    // stock ni pendiente: si no alcanza, el submit avisa y pide confirmar.
     function actualizarOpcionesProductos(contratistaId, orden) {
       filas.forEach((fila, i) => {
         const select = fila.querySelector(".fProductoRow");
         if (orden) {
           const plan = orden.comparacionProductos[i];
+          const idsPlan = new Set(orden.comparacionProductos.map((p) => p.productoId));
           select.innerHTML =
             '<option value="">Sin producto</option>' +
             orden.comparacionProductos
               .map((p) => `<option value="${p.productoId}">${p.productoNombre} (${p.dosisPorHa} ${p.unidad || ""}/ha)</option>`)
-              .join("");
+              .join("") +
+            optsOtrosInsumos(insumos, idsPlan);
           select.value = plan ? plan.productoId : "";
         } else {
           const valorPrevio = select.value;
           const placeholder = contratistaId ? "Seleccionar..." : "Elegí el contratista arriba...";
-          select.innerHTML = `<option value="">${placeholder}</option>${optsConPendiente(cuenta, contratistaId)}`;
+          const idsPendientes = new Set(
+            cuenta.filter((c) => c.contratistaId === contratistaId && c.pendiente > 0).map((c) => c.insumoId)
+          );
+          select.innerHTML = `<option value="">${placeholder}</option>${optsConPendiente(cuenta, contratistaId)}${
+            contratistaId ? optsOtrosInsumos(insumos, idsPendientes) : ""
+          }`;
           select.value = valorPrevio;
         }
       });
@@ -197,20 +217,24 @@ const aplicacionesFitosanitariosView = {
       const orden = ordenActiva();
       const dosisEl = fila.querySelector(".dosisRow");
       const cantidadInput = fila.querySelector(".fCantidadRow");
-      const plan = orden ? orden.comparacionProductos[i] : null;
-      if (!plan) {
+      const productoId = fila.querySelector(".fProductoRow").value;
+      if (!orden || !productoId) {
         dosisEl.classList.add("hidden");
-        cantidadInput.placeholder = "Cantidad total";
+        cantidadInput.placeholder = orden ? "Total usado" : "Cantidad total";
         return;
       }
+      // El plan se busca por el producto elegido (no por la posición de la
+      // fila), porque se puede elegir uno que no está en la orden.
+      const plan = orden.comparacionProductos.find((p) => p.productoId === productoId);
+      const insumo = insumos.find((x) => x.id === productoId);
+      const unidad = plan ? plan.unidad || "" : insumo ? insumo.unidad || "" : "";
       cantidadInput.placeholder = "Total usado";
       const has = parseNumero(fHas.value);
       const usado = parseNumero(cantidadInput.value);
       const dosisReal = has > 0 && usado > 0 ? Math.round((usado / has) * 100) / 100 : null;
       dosisEl.classList.remove("hidden");
-      dosisEl.textContent = `Dosis sugerida: ${plan.dosisPorHa} ${plan.unidad || ""}/ha · Dosis real: ${
-        dosisReal !== null ? dosisReal + " " + (plan.unidad || "") + "/ha" : "—"
-      }`;
+      const real = `Dosis real: ${dosisReal !== null ? dosisReal + " " + unidad + "/ha" : "—"}`;
+      dosisEl.textContent = plan ? `Dosis sugerida: ${plan.dosisPorHa} ${unidad}/ha · ${real}` : `Fuera de la orden · ${real}`;
     }
 
     function actualizarDosisFilas() {
@@ -242,6 +266,7 @@ const aplicacionesFitosanitariosView = {
 
     filas.forEach((fila, i) => {
       fila.querySelector(".fCantidadRow").addEventListener("input", () => actualizarDosisFila(fila, i));
+      fila.querySelector(".fProductoRow").addEventListener("change", () => actualizarDosisFila(fila, i));
     });
 
     fOrden.addEventListener("change", () => {
