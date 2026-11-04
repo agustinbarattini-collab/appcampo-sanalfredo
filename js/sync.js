@@ -42,6 +42,11 @@ function comprimirFotoABase64(blob, maxDim = 1600, calidad = 0.7) {
   });
 }
 
+// Cantidad máxima de productos por aplicación/orden: 6 por defecto, y cada
+// empresa puede subirlo con maxProductos en config.js (requiere que su Sheet
+// tenga las columnas productoN... correspondientes, ver Code.gs).
+const MAX_PRODUCTOS = APP_CONFIG.maxProductos || 6;
+
 function flattenAplicacion(r) {
   const out = { ...r };
   (r.productos || []).forEach((p, i) => {
@@ -510,7 +515,7 @@ async function unflattenAplicacion(fila) {
   const loteId = await resolverIdPorNombre("lotes", fila.loteNombre);
   const orden = fila.ordenTrabajoNombre ? await resolverOrden(fila.ordenTrabajoNombre, fila.contratistaNombre) : null;
   const productos = [];
-  for (let i = 1; i <= 6; i++) {
+  for (let i = 1; i <= MAX_PRODUCTOS; i++) {
     const nombre = fila[`producto${i}Nombre`];
     const cantidad = fila[`producto${i}Cantidad`];
     if (!nombre || cantidad === "" || cantidad === undefined) continue;
@@ -620,7 +625,7 @@ async function unflattenOrdenTrabajo(fila) {
     lotes.push({ loteId, loteNombre: nombreLote });
   }
   const productosPlanificados = [];
-  for (let i = 1; i <= 6; i++) {
+  for (let i = 1; i <= MAX_PRODUCTOS; i++) {
     const nombre = fila[`producto${i}Nombre`];
     const dosisPorHa = fila[`producto${i}DosisPorHa`];
     if (!nombre || dosisPorHa === "" || dosisPorHa === undefined) continue;

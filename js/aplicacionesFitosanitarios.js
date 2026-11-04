@@ -4,7 +4,7 @@ import { toast, formatearFechaCorta, parseNumero } from "./ui.js";
 import { APP_CONFIG } from "./config.js";
 
 const STORE = "aplicacionesFitosanitarios";
-const NUM_PRODUCTOS = 6;
+const NUM_PRODUCTOS = APP_CONFIG.maxProductos || 6;
 
 // Empresas que no manejan retiros de insumos (sin Insumos → Salida) ponen
 // controlStockContratista: false en config.js: no hay stock pendiente por
