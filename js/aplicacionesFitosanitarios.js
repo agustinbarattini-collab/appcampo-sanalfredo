@@ -1,9 +1,16 @@
 import { dbGetAll, dbPut, dbDelete, uid } from "./db.js";
 import { getCuentaContratistas, getOrdenesConEstado } from "./stockUtils.js";
 import { toast, formatearFechaCorta, parseNumero } from "./ui.js";
+import { APP_CONFIG } from "./config.js";
 
 const STORE = "aplicacionesFitosanitarios";
 const NUM_PRODUCTOS = 6;
+
+// Empresas que no manejan retiros de insumos (sin Insumos → Salida) ponen
+// controlStockContratista: false en config.js: no hay stock pendiente por
+// contratista que mostrar ni contra qué avisar, así que se ofrecen todos los
+// productos y se guarda sin pedir confirmación por "pendiente".
+const CONTROL_STOCK = APP_CONFIG.controlStockContratista !== false;
 
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -22,6 +29,7 @@ function opts(list) {
 // el contratista primero, tiene más sentido ver solo lo suyo.
 function renderCuentaCard(container, cuenta, contratistaId, contratistaNombre) {
   const el = container.querySelector("#cuentaCard");
+  if (!el) return;
   if (!contratistaId) {
     el.innerHTML = `<h2 style="margin-top:0;">Stock pendiente del contratista</h2><div class="empty-state">Elegí un contratista arriba para ver qué insumos tiene pendientes de usar.</div>`;
     return;
@@ -107,7 +115,7 @@ const aplicacionesFitosanitariosView = {
 
     container.innerHTML = `
       <h2>Aplicación de Fitosanitarios</h2>
-      <div class="card" id="cuentaCard"></div>
+      ${CONTROL_STOCK ? '<div class="card" id="cuentaCard"></div>' : ""}
       <div class="card">
         <form id="formAplicacion">
           <div class="field">
@@ -195,6 +203,10 @@ const aplicacionesFitosanitariosView = {
               .join("") +
             optsOtrosInsumos(insumos, idsPlan);
           select.value = plan ? plan.productoId : "";
+        } else if (!CONTROL_STOCK) {
+          const valorPrevio = select.value;
+          select.innerHTML = `<option value="">Seleccionar...</option>${opts(insumos)}`;
+          select.value = valorPrevio;
         } else {
           const valorPrevio = select.value;
           const placeholder = contratistaId ? "Seleccionar..." : "Elegí el contratista arriba...";
@@ -294,6 +306,10 @@ const aplicacionesFitosanitariosView = {
 
     fHas.addEventListener("input", actualizarDosisFilas);
 
+    // Sin control de stock los productos no dependen del contratista elegido:
+    // se ofrecen desde el principio.
+    if (!CONTROL_STOCK) actualizarOpcionesProductos("", null);
+
     container.querySelector("#formAplicacion").addEventListener("submit", async (e) => {
       e.preventDefault();
       const contratistaId = fContratista.value;
@@ -320,6 +336,7 @@ const aplicacionesFitosanitariosView = {
           cantidad,
         });
 
+        if (!CONTROL_STOCK) continue;
         const cuentaActual = cuenta.find((x) => x.contratistaId === contratistaId && x.insumoId === productoId);
         const pendiente = cuentaActual ? cuentaActual.pendiente : 0;
         if (cantidad > pendiente) {
