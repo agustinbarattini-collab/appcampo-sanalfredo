@@ -1,4 +1,4 @@
-const CACHE_NAME = "appcampo-sanalfredo-v24";
+const CACHE_NAME = "appcampo-sanalfredo-v25";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -38,16 +38,25 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("fetch", (event) => {
-  if (event.request.method !== "GET") return;
+  const req = event.request;
+  if (req.method !== "GET") return;
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      const fetchPromise = fetch(event.request)
+    (async () => {
+      const cache = await caches.open(CACHE_NAME);
+      const esNavegacion = req.mode === "navigate";
+      // Los links con ?rol=... (o cualquier otro parámetro) son la misma página:
+      // sin ignoreSearch no se encontraban en la caché y no abrían sin señal.
+      let cached = await cache.match(req, { ignoreSearch: esNavegacion });
+      if (!cached && esNavegacion) cached = await cache.match("./index.html");
+      const fetchPromise = fetch(req)
         .then((networkResponse) => {
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, networkResponse.clone()));
+          // Solo se guardan respuestas buenas: un error pasajero del servidor
+          // no debe pisar la copia que sirve para trabajar sin señal.
+          if (networkResponse && networkResponse.ok) cache.put(req, networkResponse.clone());
           return networkResponse;
         })
         .catch(() => cached);
       return cached || fetchPromise;
-    })
+    })()
   );
 });
