@@ -2,6 +2,7 @@ import { dbGetAll, dbPut, dbDelete, uid } from "./db.js";
 import { getCuentaContratistas, getOrdenesConEstado } from "./stockUtils.js";
 import { toast, formatearFechaCorta, parseNumero } from "./ui.js";
 import { APP_CONFIG } from "./config.js";
+import { montarZonaEnOrden } from "./zonaOrden.js";
 
 const STORE = "aplicacionesFitosanitarios";
 const NUM_PRODUCTOS = APP_CONFIG.maxProductos || 6;
@@ -144,6 +145,14 @@ const aplicacionesFitosanitariosView = {
       <div class="card">
         <form id="formAplicacion">
           ${
+            APP_CONFIG.lotesGeo
+              ? `<div class="field">
+            <button type="button" id="btnDetectarLote">📍 Detectar el lote por mi ubicación</button>
+            <div class="muted hidden" id="detectarLoteInfo"></div>
+          </div>`
+              : ""
+          }
+          ${
             lotesFiltro.length
               ? `<div class="field">
             <label>Filtrar órdenes por lote</label>
@@ -162,6 +171,7 @@ const aplicacionesFitosanitariosView = {
               ${optsOrdenes(ordenesConEstado)}
             </select>
             <div class="muted">Si elegís una orden, se completan solos el contratista, el lote y los productos planificados con su dosis.</div>
+            <div class="hidden" id="zonaOrdenFila"></div>
           </div>
           <div class="field">
             <label>Contratista</label>
@@ -346,6 +356,76 @@ const aplicacionesFitosanitariosView = {
       });
     }
 
+    // Detectar el lote por ubicación (solo empresas con lotesGeo: true y su
+    // mapa en js/lotesGeo.js): según el GPS del celular se elige el lote y se
+    // propone su orden pendiente.
+    const btnDetectar = container.querySelector("#btnDetectarLote");
+    if (btnDetectar) {
+      const info = container.querySelector("#detectarLoteInfo");
+      const mostrar = (texto) => {
+        info.textContent = texto;
+        info.classList.remove("hidden");
+      };
+      btnDetectar.addEventListener("click", async () => {
+        btnDetectar.disabled = true;
+        mostrar("Buscando tu ubicación...");
+        try {
+          const geo = await import("./geoLotes.js");
+          const features = await geo.cargarGeoLotes();
+          if (!features) {
+            mostrar("Este celular no tiene el mapa de lotes cargado.");
+            return;
+          }
+          const pos = await geo.ubicacionActual();
+          const r = geo.detectar(features, pos.lat, pos.lng);
+          const precision = `Precisión del GPS: ±${Math.round(pos.precision)} m.`;
+          // Si el GPS cae a pocos metros del borde, se toma ese lote igual.
+          const objetivo = r.dentro || (r.cercano && r.cercano.metros <= 40 ? r.cercano.feature : null);
+          if (!objetivo) {
+            mostrar(
+              r.cercano
+                ? `No estás dentro de ningún lote del mapa (el más cercano es ${r.cercano.feature.nombre}, a ${Math.round(r.cercano.metros)} m). ${precision}`
+                : "No se encontró ningún lote en el mapa."
+            );
+            return;
+          }
+          const nombresMapa = objetivo.lotes.map(geo.normalizar);
+          const candidatos = lotes.filter((l) => nombresMapa.includes(geo.normalizar(l.nombre)));
+          const donde = `${r.dentro ? "Estás en" : "Estás en el borde de"} ${objetivo.nombre}${objetivo.ambiente ? " (" + objetivo.ambiente.toLowerCase() + ")" : ""}`;
+          if (candidatos.length === 0) {
+            mostrar(`${donde}, pero ese lote no está cargado en Maestros. ${precision}`);
+            return;
+          }
+          const elegido = candidatos.find((l) => lotesConOrden.has(l.id)) || candidatos[0];
+          // Si el polígono del mapa se llama distinto que el lote de la app
+          // (ej. "SP 4" dentro del lote "SP 3-4-5-6"), se aclara cuál es.
+          const dondeLote =
+            geo.normalizar(elegido.nombre) !== geo.normalizar(objetivo.nombre) ? `${donde} (lote ${elegido.nombre})` : donde;
+          const ordenesLote = ordenesConEstado.filter(
+            (o) => o.estado !== "completada" && o.lotes.some((l) => l.loteId === elegido.id)
+          );
+          if (fLoteFiltroOrden && lotesConOrden.has(elegido.id)) {
+            fLoteFiltroOrden.value = elegido.id;
+            fLoteFiltroOrden.dispatchEvent(new Event("change"));
+            if (ordenesLote.length === 1) {
+              fOrden.value = ordenesLote[0].id;
+              fOrden.dispatchEvent(new Event("change"));
+              mostrar(`${dondeLote}. Orden propuesta: ${ordenesLote[0].nombre}. ${precision}`);
+            } else {
+              mostrar(`${dondeLote}. Hay ${ordenesLote.length} órdenes pendientes para este lote: elegí cuál. ${precision}`);
+            }
+          } else {
+            if ([...fLote.options].some((o) => o.value === elegido.id)) fLote.value = elegido.id;
+            mostrar(`${dondeLote}. No hay órdenes pendientes para este lote (podés cargar la aplicación sin orden). ${precision}`);
+          }
+        } catch (err) {
+          mostrar(err.message || "No se pudo detectar el lote.");
+        } finally {
+          btnDetectar.disabled = false;
+        }
+      });
+    }
+
     fOrden.addEventListener("change", () => {
       const orden = ordenActiva();
       fContratista.disabled = !!orden;
@@ -354,6 +434,13 @@ const aplicacionesFitosanitariosView = {
       renderCuentaCard(container, cuenta, fContratista.value, contratista ? contratista.nombre : "");
       poblarLoteSegunOrden(orden);
       actualizarHasSugerida(orden);
+      // Si la orden tiene una zona marcada (no va todo el lote), se puede ver en el mapa.
+      const zonaFila = container.querySelector("#zonaOrdenFila");
+      if (orden) montarZonaEnOrden(zonaFila, orden, { editable: false });
+      else {
+        zonaFila.innerHTML = "";
+        zonaFila.classList.add("hidden");
+      }
       actualizarOpcionesProductos(fContratista.value, orden);
       // Nueva orden: se limpia lo que se haya tipeado antes de "total usado"
       // para que el contratista cargue lo que realmente usó de esta orden.

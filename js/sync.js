@@ -79,6 +79,8 @@ function flattenOrdenTrabajo(r) {
     out[`producto${i + 1}Unidad`] = p.unidad;
   });
   out.estado = r.anulada ? "Anulada" : "";
+  out.zona = r.zona && r.zona.length ? JSON.stringify(r.zona) : "";
+  out.zonaPendiente = undefined;
   out.anulada = undefined;
   out.lotes = undefined;
   out.productosPlanificados = undefined;
@@ -111,16 +113,103 @@ async function contarPendientes() {
     const items = await dbGetAll(store);
     total += items.filter((r) => !r.sincronizado).length;
   }
+  // Zonas a aplicar marcadas en la app que todavía no se subieron a la Sheet.
+  const ordenes = await dbGetAll("ordenesTrabajo");
+  total += ordenes.filter((o) => o.zonaPendiente).length;
   return total;
 }
 
+// Tiempo máximo de espera por llamada a la planilla. Sin esto, una llamada colgada
+// por mala señal dejaba "syncing" trabado en true y TODAS las sincronizaciones
+// siguientes salían sin hacer nada (ni avisar).
+const TIEMPO_MAX_LLAMADA_MS = 90000;
+
 async function llamarBackend(body) {
-  const res = await fetch(APP_CONFIG.sheetsWebAppUrl, {
-    method: "POST",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify({ token: APP_CONFIG.sheetsSyncToken, ...body }),
-  });
-  return res.json();
+  const control = new AbortController();
+  const timer = setTimeout(() => control.abort(), TIEMPO_MAX_LLAMADA_MS);
+  try {
+    const res = await fetch(APP_CONFIG.sheetsWebAppUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ token: APP_CONFIG.sheetsSyncToken, ...body }),
+      signal: control.signal,
+    });
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// La zona a aplicar de una orden (cuando no va todo el lote) se marca desde la
+// app sobre una orden que YA existe en la Sheet, así que no se manda como un
+// registro nuevo (duplicaría la fila): el backend actualiza la columna "zona"
+// de la fila con ese nombre.
+// Texto claro de por qué falló una llamada a la planilla (para mostrarlo en pantalla).
+function describirErrorDeRed(err) {
+  const detalle = err && (err.message || err.name) ? ` [${err.name || "Error"}: ${err.message || ""}]` : "";
+  if (err && err.name === "AbortError") return "la planilla tardó demasiado en responder (probá con mejor señal)";
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return "el celular no tiene internet en este momento";
+  if (err instanceof SyntaxError) return "la planilla respondió algo inesperado (no es una respuesta válida)" + detalle;
+  if (err instanceof TypeError) return "no se pudo conectar con la planilla (error de red)" + detalle;
+  return "error inesperado" + detalle;
+}
+
+let subiendoZonas = false;
+
+// Devuelve { ocupado, resultados: [{ nombre, ok, mensaje }] } para poder avisarle a
+// quien toca "Subir ahora" qué pasó. No depende del candado de syncAll().
+async function subirZonasPendientes() {
+  if (subiendoZonas) return { ocupado: true, resultados: [] };
+  subiendoZonas = true;
+  const resultados = [];
+  try {
+    const ordenes = await dbGetAll("ordenesTrabajo");
+    for (const o of ordenes.filter((x) => x.zonaPendiente)) {
+      const zonaTxt = o.zona && o.zona.length ? JSON.stringify(o.zona) : "";
+      const guardarError = async (mensaje) => {
+        const fresca = (await dbGetAll("ordenesTrabajo")).find((x) => x.id === o.id);
+        if (fresca) {
+          fresca.zonaError = mensaje;
+          await dbPut("ordenesTrabajo", fresca);
+        }
+      };
+      try {
+        const data = await llamarBackend({ accion: "guardarZonaOrden", nombre: o.nombre, zona: zonaTxt });
+        // Se relee por si la zona se volvió a editar mientras se subía.
+        const fresca = (await dbGetAll("ordenesTrabajo")).find((x) => x.id === o.id);
+        const frescaTxt = fresca && fresca.zona && fresca.zona.length ? JSON.stringify(fresca.zona) : "";
+        if (!data.ok && !data.noEncontrada) {
+          // El servidor la rechazó: queda pendiente y se guarda el motivo para mostrarlo en la orden.
+          const mensaje = String(data.error || "la planilla la rechazó");
+          console.warn("La planilla rechazó la zona de la orden:", o.nombre, mensaje);
+          await guardarError(mensaje);
+          resultados.push({ nombre: o.nombre, ok: false, mensaje });
+          continue;
+        }
+        if (data.noEncontrada) {
+          console.warn("La orden no está en la planilla, la zona queda solo en este celular:", o.nombre);
+        }
+        if (fresca && frescaTxt === zonaTxt) {
+          fresca.zonaPendiente = false;
+          fresca.zonaError = data.noEncontrada ? "esa orden no está en la planilla (la zona queda solo en este celular)" : "";
+          await dbPut("ordenesTrabajo", fresca);
+        }
+        resultados.push({
+          nombre: o.nombre,
+          ok: !data.noEncontrada,
+          mensaje: data.noEncontrada ? "esa orden no está en la planilla" : "",
+        });
+      } catch (err) {
+        const mensaje = describirErrorDeRed(err);
+        console.warn("No se pudo subir la zona de la orden:", o.nombre, err);
+        await guardarError(mensaje);
+        resultados.push({ nombre: o.nombre, ok: false, mensaje });
+      }
+    }
+  } finally {
+    subiendoZonas = false;
+  }
+  return { ocupado: false, resultados };
 }
 
 async function syncAll(onProgress) {
@@ -157,6 +246,7 @@ async function syncAll(onProgress) {
         if (onProgress) await onProgress();
       }
     }
+    await subirZonasPendientes();
   } finally {
     syncing = false;
   }
@@ -644,8 +734,23 @@ async function unflattenOrdenTrabajo(fila) {
   // pintada de gris en la Sheet) — para una orden realmente nueva, casi
   // siempre va a venir vacía, así que hace falta generar un id acá mismo en
   // vez de asumir que la fila trae uno.
+  // Zona a aplicar: viene como texto JSON en la columna "zona". Si en este
+  // celular hay una zona marcada que todavía no se subió, esa manda (no se
+  // pisa con lo que haya en la Sheet hasta que se suba).
+  let zona = [];
+  try {
+    const crudo = typeof fila.zona === "string" ? (fila.zona.trim() ? JSON.parse(fila.zona) : []) : fila.zona;
+    if (Array.isArray(crudo)) zona = crudo;
+  } catch (_) {
+    zona = [];
+  }
+  const zonaPendiente = !!(existente && existente.zonaPendiente);
+  if (zonaPendiente) zona = existente.zona || [];
   return {
     id: existente ? existente.id : fila.id || uid(),
+    zona,
+    zonaPendiente,
+    zonaError: zonaPendiente ? existente.zonaError || "" : "",
     nombre: nombreOrden,
     contratistaId,
     contratistaNombre: String(fila.contratistaNombre || "").trim(),
@@ -716,4 +821,4 @@ async function pullAll() {
   }
 }
 
-export { syncAll, contarPendientes, importarMaestros, pullAll };
+export { syncAll, contarPendientes, importarMaestros, pullAll, subirZonasPendientes, describirErrorDeRed };

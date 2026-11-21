@@ -2,6 +2,7 @@ import { dbGetAll } from "./db.js";
 import { getOrdenesConEstado } from "./stockUtils.js";
 import { formatearFechaCorta } from "./ui.js";
 import { APP_CONFIG } from "./config.js";
+import { conectarGestoEditor, montarZonaEnOrden } from "./zonaOrden.js";
 
 // App de un contratista (contratistaFijo en config.js): solo trae sus órdenes,
 // así que no tiene sentido el filtro por contratista.
@@ -71,6 +72,12 @@ const ordenesTrabajoView = {
       <div class="card" id="listaRealizadas"></div>
     `;
 
+    // 5 toques en el título activan/desactivan el modo edición de zonas (solo en
+    // empresas con mapa de lotes y no en la app de un contratista).
+    if (APP_CONFIG.lotesGeo) {
+      conectarGestoEditor(container.querySelector("h2"), () => this.render(container));
+    }
+
     container.querySelector("#fContratistaFiltro").addEventListener("change", (e) => {
       this.state.contratistaId = e.target.value;
       this.render(container);
@@ -100,12 +107,13 @@ const ordenesTrabajoView = {
     const pendientes = ordenesFiltradas.filter((o) => o.estado !== "completada").sort(porFechaInicio);
     const realizadas = ordenesFiltradas.filter((o) => o.estado === "completada").sort(porFechaInicio);
 
-    renderListado(container.querySelector("#listaPendientes"), "Pendientes", pendientes, hayFiltro, "No hay órdenes pendientes con este filtro.");
+    const recargar = () => this.render(container);
+    renderListado(container.querySelector("#listaPendientes"), "Pendientes", pendientes, hayFiltro, "No hay órdenes pendientes con este filtro.", recargar);
     // Realizadas: se listan solo para consultar, así que van colapsadas
     // (lote + fecha) y ocupan una sola línea hasta que se las abre a
     // propósito — el detalle completo (productos, dosis, necesidad total)
     // ya no importa para el día a día una vez que la orden está hecha.
-    renderListadoRealizadas(container.querySelector("#listaRealizadas"), realizadas, hayFiltro);
+    renderListadoRealizadas(container.querySelector("#listaRealizadas"), realizadas, hayFiltro, recargar);
   },
 };
 
@@ -129,7 +137,7 @@ function tablaProductos(o) {
     </table>`;
 }
 
-function renderListado(lista, titulo, ordenes, hayFiltro, mensajeVacioConFiltro) {
+function renderListado(lista, titulo, ordenes, hayFiltro, mensajeVacioConFiltro, recargar) {
   if (ordenes.length === 0) {
     lista.innerHTML = `<h2 style="margin-top:0;">${titulo} (0)</h2><div class="empty-state">${
       hayFiltro ? mensajeVacioConFiltro : "No hay órdenes en este grupo."
@@ -149,8 +157,10 @@ function renderListado(lista, titulo, ordenes, hayFiltro, mensajeVacioConFiltro)
       ${o.observaciones ? `<div class="muted">Observaciones: ${o.observaciones}</div>` : ""}
       <div class="muted">Fecha: ${formatearFechaCorta(o.fechaAsignacion)}${o.fechaLimite ? " – " + formatearFechaCorta(o.fechaLimite) : ""}</div>
       ${tablaProductos(o)}
+      <div class="hidden" data-zona></div>
     `;
     lista.appendChild(row);
+    montarZonaEnOrden(row.querySelector("[data-zona]"), o, { editable: true, onCambio: recargar });
   }
 }
 
@@ -174,7 +184,7 @@ function tablaProductosRealizada(o) {
     </table>`;
 }
 
-function renderListadoRealizadas(lista, ordenes, hayFiltro) {
+function renderListadoRealizadas(lista, ordenes, hayFiltro, recargar) {
   if (ordenes.length === 0) {
     lista.innerHTML = `<h2 style="margin-top:0;">Realizadas (0)</h2><div class="empty-state">${
       hayFiltro ? "No hay órdenes realizadas con este filtro." : "No hay órdenes realizadas."
@@ -194,9 +204,11 @@ function renderListadoRealizadas(lista, ordenes, hayFiltro) {
         <div class="muted">Fecha: ${formatearFechaCorta(o.fechaAsignacion)}${o.fechaLimite ? " – " + formatearFechaCorta(o.fechaLimite) : ""}</div>
         <div class="muted">Has realizadas: ${o.hasAplicadas} ha</div>
         ${tablaProductosRealizada(o)}
+        <div class="hidden" data-zona></div>
       </div>
     `;
     lista.appendChild(det);
+    montarZonaEnOrden(det.querySelector("[data-zona]"), o, { editable: false, onCambio: recargar });
   }
 }
 

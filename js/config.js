@@ -7,6 +7,8 @@ const APP_CONFIG = {
   sheetsWebAppUrl: "https://script.google.com/macros/s/AKfycbzFS14tMD4lMaGy5xr1QGdkSywixekxMecBV0ck-bYybIz2kcdEeJwPzBvYHUUL1poz/exec",
   // Mismo token que SHARED_SECRET en google-apps-script/Code.gs.
   sheetsSyncToken: "SAA2026",
+  // Detectar el lote por ubicación (GPS) y marcar zonas en las órdenes: necesita js/lotesGeo.js.
+  lotesGeo: true,
 };
 
 export { APP_CONFIG };
