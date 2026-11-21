@@ -1,4 +1,4 @@
-const CACHE_NAME = "appcampo-sanalfredo-v25";
+const CACHE_NAME = "appcampo-sanalfredo-v26";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -23,7 +23,11 @@ const APP_SHELL = [
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
+    caches.open(CACHE_NAME).then((cache) =>
+      // cache: "reload" salta la copia que el navegador guarda hasta 10 minutos: sin
+      // esto, una versión nueva podía instalarse con archivos viejos adentro.
+      cache.addAll(APP_SHELL.map((url) => new Request(url, { cache: "reload" })))
+    )
   );
   self.skipWaiting();
 });
@@ -48,7 +52,8 @@ self.addEventListener("fetch", (event) => {
       // sin ignoreSearch no se encontraban en la caché y no abrían sin señal.
       let cached = await cache.match(req, { ignoreSearch: esNavegacion });
       if (!cached && esNavegacion) cached = await cache.match("./index.html");
-      const fetchPromise = fetch(req)
+      // no-cache: revalida contra el servidor (barato, 304) en vez de usar la copia del navegador.
+      const fetchPromise = fetch(req, { cache: "no-cache" })
         .then((networkResponse) => {
           // Solo se guardan respuestas buenas: un error pasajero del servidor
           // no debe pisar la copia que sirve para trabajar sin señal.
