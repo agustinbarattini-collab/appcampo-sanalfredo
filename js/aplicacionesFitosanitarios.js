@@ -1,6 +1,7 @@
-import { dbGetAll, dbPut, dbDelete, uid } from "./db.js";
+import { dbGetAll, dbPut, uid } from "./db.js";
+import { guardarEdicion, eliminarRegistro, listarCambios, claveDe } from "./cambios.js";
 import { getCuentaContratistas, getOrdenesConEstado } from "./stockUtils.js";
-import { toast, formatearFechaCorta, parseNumero } from "./ui.js";
+import { toast, formatearFechaCorta, parseNumero, asegurarOpcion } from "./ui.js";
 import { APP_CONFIG } from "./config.js";
 import { montarZonaEnOrden } from "./zonaOrden.js";
 
@@ -21,6 +22,9 @@ const CONTRATISTA_FIJO = String(APP_CONFIG.contratistaFijo || "").trim().toLower
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
+
+// Aplicación que se está corrigiendo (null = formulario de aplicación nueva).
+let editando = null;
 
 function opts(list) {
   return list
@@ -142,6 +146,15 @@ const aplicacionesFitosanitariosView = {
     container.innerHTML = `
       <h2>Aplicación de Fitosanitarios</h2>
       ${CONTROL_STOCK ? '<div class="card" id="cuentaCard"></div>' : ""}
+      ${
+        editando
+          ? `<div class="card" id="bannerEdicion" style="border:2px solid var(--color-primario);">
+        <strong>Estás corrigiendo una aplicación ya guardada</strong>
+        <div class="muted">${formatearFechaCorta(editando.fecha)} · ${editando.loteNombre || ""} · ${editando.hectareas} ha. Cambiá lo que esté mal y tocá "Guardar cambios".</div>
+        <button type="button" class="secondary" id="btnCancelarEdicion" style="margin-top:8px;">Cancelar corrección</button>
+      </div>`
+          : ""
+      }
       <div class="card">
         <form id="formAplicacion">
           ${
@@ -211,7 +224,7 @@ const aplicacionesFitosanitariosView = {
             <label>Comentarios</label>
             <textarea id="fComentarios"></textarea>
           </div>
-          <button type="submit">Guardar aplicación</button>
+          <button type="submit">${editando ? "Guardar cambios" : "Guardar aplicación"}</button>
         </form>
       </div>
       <div class="card" id="listaAplicaciones"></div>
@@ -500,7 +513,9 @@ const aplicacionesFitosanitariosView = {
 
         if (!CONTROL_STOCK) continue;
         const cuentaActual = cuenta.find((x) => x.contratistaId === contratistaId && x.insumoId === productoId);
-        const pendiente = cuentaActual ? cuentaActual.pendiente : 0;
+        // Al corregir, lo que esta misma aplicación ya descontó vuelve a estar disponible.
+        const previo = editando && editando.contratistaId === contratistaId ? (editando.productos || []).find((x) => x.productoId === productoId) : null;
+        const pendiente = (cuentaActual ? cuentaActual.pendiente : 0) + (previo ? previo.cantidad : 0);
         if (cantidad > pendiente) {
           avisos.push(`"${producto ? producto.nombre : productoId}": pendiente ${pendiente} ${producto ? producto.unidad || "" : ""}, estás cargando ${cantidad}`);
         }
@@ -527,18 +542,30 @@ const aplicacionesFitosanitariosView = {
         if (!continuar) return;
       }
 
-      const registro = {
-        id: uid(),
+      const datos = {
         fecha: container.querySelector("#fFecha").value,
         contratistaId,
         contratistaNombre: contratista ? contratista.nombre : "",
         loteId,
         loteNombre: lote ? lote.nombre : "",
         ordenTrabajoId: ordenId || null,
-        ordenTrabajoNombre: orden ? orden.nombre : "",
+        // Si la orden elegida ya no figura en la lista (ej. quedó completada), se conserva el nombre que tenía.
+        ordenTrabajoNombre: orden ? orden.nombre : editando && ordenId === editando.ordenTrabajoId ? editando.ordenTrabajoNombre || "" : "",
         hectareas: parseNumero(container.querySelector("#fHas").value),
         productos,
         comentarios: container.querySelector("#fComentarios").value.trim(),
+      };
+      if (editando) {
+        await guardarEdicion(STORE, "aplicacionFitosanitaria", { ...editando, ...datos });
+        editando = null;
+        window.dispatchEvent(new Event("appcampo-sync-now"));
+        toast("Aplicación corregida.");
+        this.render(container);
+        return;
+      }
+      const registro = {
+        id: uid(),
+        ...datos,
         sincronizado: false,
         fechaCreacionRegistro: new Date().toISOString(),
       };
@@ -548,6 +575,36 @@ const aplicacionesFitosanitariosView = {
       this.render(container);
     });
 
+    // Modo corrección: se precarga el formulario con los datos de la aplicación elegida.
+    // Primero la orden (su cambio limpia productos, lote y cantidades) y después el resto.
+    if (editando) {
+      const a = editando;
+      if (a.ordenTrabajoId) {
+        asegurarOpcion(fOrden, a.ordenTrabajoId, a.ordenTrabajoNombre);
+        fOrden.dispatchEvent(new Event("change"));
+      } else if (!CONTRATISTA_FIJO) {
+        asegurarOpcion(fContratista, a.contratistaId, a.contratistaNombre);
+        fContratista.dispatchEvent(new Event("change"));
+      }
+      container.querySelector("#fFecha").value = String(a.fecha || today()).slice(0, 10);
+      asegurarOpcion(fLote, a.loteId, a.loteNombre);
+      fHas.value = String(a.hectareas ?? "");
+      filas.forEach((fila, i) => {
+        const p = (a.productos || [])[i];
+        const select = fila.querySelector(".fProductoRow");
+        if (p) asegurarOpcion(select, p.productoId, p.productoNombre);
+        else select.value = "";
+        fila.querySelector(".fCantidadRow").value = p ? String(p.cantidad) : "";
+      });
+      container.querySelector("#fComentarios").value = a.comentarios || "";
+      actualizarDosisFilas();
+      container.querySelector("#btnCancelarEdicion").addEventListener("click", () => {
+        editando = null;
+        this.render(container);
+      });
+      container.querySelector("#bannerEdicion").scrollIntoView({ block: "start" });
+    }
+
     await renderListadoAplicaciones(container);
   },
 };
@@ -555,6 +612,7 @@ const aplicacionesFitosanitariosView = {
 async function renderListadoAplicaciones(container) {
   const lista = container.querySelector("#listaAplicaciones");
   const aplicaciones = (await dbGetAll(STORE)).sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""));
+  const cambiosEnCola = new Map((await listarCambios()).map((x) => [x.clave, x]));
   if (aplicaciones.length === 0) {
     lista.innerHTML = '<div class="empty-state">Todavía no registraste aplicaciones.</div>';
     return;
@@ -564,23 +622,43 @@ async function renderListadoAplicaciones(container) {
     const row = document.createElement("div");
     row.className = "list-item";
     const productosTxt = (a.productos || []).map((p) => `${p.productoNombre}: ${p.cantidad} ${p.unidad || ""}`).join(", ");
+    const cambio = cambiosEnCola.get(claveDe("aplicacionFitosanitaria", a.id));
+    const correccionPendiente = a.sincronizado && cambio && cambio.accion === "editar";
+    const errorTxt = cambio && cambio.error ? `<div class="muted" style="color:#c0392b;">No se pudo subir la corrección: ${cambio.error}</div>` : "";
+    // En la app de un contratista, lo que ya se sincronizó no se toca desde el celular.
+    const puedeCambiar = !(CONTRATISTA_FIJO && a.sincronizado);
     row.innerHTML = `
       <div>
         <div><strong>${a.loteNombre}</strong> — ${productosTxt} (${a.hectareas} ha)</div>
         <div class="muted">${formatearFechaCorta(a.fecha)} · ${a.contratistaNombre}${a.ordenTrabajoNombre ? " · orden " + a.ordenTrabajoNombre : ""}${a.comentarios ? " · " + a.comentarios : ""}</div>
+        ${errorTxt}
       </div>
       <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
-        <span class="pill ${a.sincronizado ? "sincronizado" : "pendiente"}">${a.sincronizado ? "Sincronizado" : "Pendiente"}</span>
-        ${CONTRATISTA_FIJO && a.sincronizado ? "" : `<button class="danger" data-id="${a.id}">Borrar</button>`}
+        <span class="pill ${a.sincronizado && !correccionPendiente ? "sincronizado" : "pendiente"}">${correccionPendiente ? "Corrección pendiente" : a.sincronizado ? "Sincronizado" : "Pendiente"}</span>
+        ${puedeCambiar ? '<button class="secondary" data-accion="editar">Editar</button><button class="danger" data-accion="eliminar">Eliminar</button>' : ""}
       </div>
     `;
-    const btnBorrar = row.querySelector("button");
-    if (btnBorrar) btnBorrar.addEventListener("click", async () => {
-      if (confirm("¿Borrar este registro?")) {
-        await dbDelete(STORE, a.id);
+    const btnEditar = row.querySelector('[data-accion="editar"]');
+    if (btnEditar) {
+      btnEditar.addEventListener("click", () => {
+        editando = a;
         aplicacionesFitosanitariosView.render(container);
-      }
-    });
+      });
+    }
+    const btnEliminar = row.querySelector('[data-accion="eliminar"]');
+    if (btnEliminar) {
+      btnEliminar.addEventListener("click", async () => {
+        const resumen = `${formatearFechaCorta(a.fecha)} · ${a.loteNombre} · ${productosTxt} (${a.hectareas} ha)`;
+        const aviso = a.sincronizado
+          ? "\n\nSe elimina también de la planilla (queda una copia en la pestaña \"Historial de cambios\")."
+          : "";
+        if (!confirm(`¿Eliminar esta aplicación?\n\n${resumen}${aviso}`)) return;
+        await eliminarRegistro(STORE, "aplicacionFitosanitaria", a.id);
+        if (editando && editando.id === a.id) editando = null;
+        window.dispatchEvent(new Event("appcampo-sync-now"));
+        aplicacionesFitosanitariosView.render(container);
+      });
+    }
     lista.appendChild(row);
   }
 }

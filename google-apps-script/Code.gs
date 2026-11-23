@@ -37,6 +37,10 @@ const SHEETS = {
       "observaciones", "fotoUrl",
       "gpsLat", "gpsLng", "kgBrutos", "tara",
       "fechaCreacionRegistro", "fechaSincronizacion",
+      // Tercer origen: van al FINAL para no correr de lugar las columnas (y los
+      // datos) que ya existen. Los encabezados se escriben solos al primer envío.
+      // No cambiar de lugar las columnas de esta pestaña: la app las llena por posición.
+      "origen3Tipo", "origen3Nombre", "kgOrigen3",
     ],
   },
   movimientoInsumo: {
@@ -528,6 +532,7 @@ function backfillKgOrigen1CargaGranos() {
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   const colKgOrigen1 = headers.indexOf("kgOrigen1");
   const colKgOrigen2 = headers.indexOf("kgOrigen2");
+  const colKgOrigen3 = headers.indexOf("kgOrigen3"); // puede no existir (-1)
   const colKgNeto = headers.indexOf("kgNeto");
   if (colKgOrigen1 === -1 || colKgOrigen2 === -1 || colKgNeto === -1) {
     Logger.log("Faltan columnas kgOrigen1/kgOrigen2/kgNeto en la fila 1 — no se puede completar.");
@@ -542,7 +547,8 @@ function backfillKgOrigen1CargaGranos() {
     if (fila[colKgOrigen1] === "" || fila[colKgOrigen1] === null) {
       const kgNeto = parseFloat(fila[colKgNeto]) || 0;
       const kgOrigen2 = parseFloat(fila[colKgOrigen2]) || 0;
-      fila[colKgOrigen1] = kgNeto - kgOrigen2;
+      const kgOrigen3 = colKgOrigen3 === -1 ? 0 : parseFloat(fila[colKgOrigen3]) || 0;
+      fila[colKgOrigen1] = kgNeto - kgOrigen2 - kgOrigen3;
       completadas++;
     }
   });
@@ -574,6 +580,13 @@ function doPost(e) {
       return guardarZonaOrden(body.nombre, body.zona);
     }
 
+    if (body.accion === "actualizarRegistro") {
+      return actualizarRegistro(body.tipo, body.registro, null);
+    }
+    if (body.accion === "eliminarRegistro") {
+      return eliminarRegistro(body.tipo, body.id, null);
+    }
+
     const cfg = SHEETS[body.tipo];
     if (!cfg) {
       return respond({ ok: false, error: "tipo desconocido: " + body.tipo });
@@ -585,20 +598,43 @@ function doPost(e) {
       sheet = ss.getSheetByName(cfg.name);
     }
     const r = body.registro || {};
-    let fotoUrl = "";
-    if (r.fotoBase64) {
-      fotoUrl = guardarFotoEnDrive(r.fotoBase64, body.tipo, r.id);
+    // Un mismo registro puede llegar DOS veces (el celular no recibió la respuesta y
+    // reintenta, o dos pestañas sincronizan a la vez): se serializa con un candado y,
+    // si ese id ya está en la pestaña, no se vuelve a agregar (se contesta ok igual,
+    // así el celular lo da por sincronizado y deja de reenviarlo).
+    const candado = LockService.getScriptLock();
+    candado.waitLock(30000);
+    try {
+      asegurarEncabezados(sheet, cfg);
+      const colId = cfg.headers.indexOf("id") + 1;
+      const ultima = sheet.getLastRow();
+      if (colId > 0 && r.id && ultima >= 2) {
+        const ids = sheet.getRange(2, colId, ultima - 1, 1).getValues();
+        for (let i = 0; i < ids.length; i++) {
+          if (String(ids[i][0]) === String(r.id)) {
+            const colFoto = cfg.headers.indexOf("fotoUrl") + 1;
+            const fotoExistente = colFoto > 0 ? String(sheet.getRange(i + 2, colFoto).getValue() || "") : "";
+            return respond({ ok: true, fotoUrl: fotoExistente, duplicado: true });
+          }
+        }
+      }
+      let fotoUrl = "";
+      if (r.fotoBase64) {
+        fotoUrl = guardarFotoEnDrive(r.fotoBase64, body.tipo, r.id);
+      }
+      const row = cfg.headers.map(function (h) {
+        if (h === "fechaSincronizacion") return new Date().toISOString();
+        if (h === "fotoUrl") return fotoUrl;
+        const v = r[h];
+        if (v === undefined || v === null) return "";
+        if (typeof v === "object") return JSON.stringify(v);
+        return v;
+      });
+      sheet.appendRow(row);
+      return respond({ ok: true, fotoUrl: fotoUrl });
+    } finally {
+      candado.releaseLock();
     }
-    const row = cfg.headers.map(function (h) {
-      if (h === "fechaSincronizacion") return new Date().toISOString();
-      if (h === "fotoUrl") return fotoUrl;
-      const v = r[h];
-      if (v === undefined || v === null) return "";
-      if (typeof v === "object") return JSON.stringify(v);
-      return v;
-    });
-    sheet.appendRow(row);
-    return respond({ ok: true, fotoUrl: fotoUrl });
   } catch (err) {
     return respond({ ok: false, error: String(err) });
   }
@@ -639,6 +675,185 @@ function obtenerOCrearCarpeta(nombre, padre) {
   return existentes.hasNext() ? existentes.next() : base.createFolder(nombre);
 }
 
+// ---------------------------------------------------------------------------
+// Corregir y eliminar registros desde la app (celular).
+// Solo para estos tipos (los que cargan los operarios y se pueden confundir).
+// Cada cambio queda registrado en la pestaña "Historial de cambios" con cómo
+// estaba la fila antes y cómo quedó, para poder revisarlo o recuperarlo.
+// ---------------------------------------------------------------------------
+const TIPOS_EDITABLES = ["cargaGranos", "movimientoInsumo", "aplicacionFitosanitaria"];
+const HOJA_HISTORIAL = "Historial de cambios";
+const HISTORIAL_ENCABEZADOS = ["fecha y hora", "acción", "pestaña", "id", "qué cambió", "fila antes (JSON)", "fila después (JSON)"];
+
+// Fecha/hora de una celda en texto estable (Sheets entrega objetos Date).
+function valorPlano(v) {
+  if (v instanceof Date) {
+    const zona = Session.getScriptTimeZone();
+    const sinHora = v.getHours() === 0 && v.getMinutes() === 0 && v.getSeconds() === 0;
+    return Utilities.formatDate(v, zona, sinHora ? "yyyy-MM-dd" : "yyyy-MM-dd'T'HH:mm:ss");
+  }
+  return v === null || v === undefined ? "" : v;
+}
+
+function filaComoObjeto(headers, valores) {
+  const o = {};
+  headers.forEach(function (h, i) { o[h] = valorPlano(valores[i]); });
+  return o;
+}
+
+// Escribe una línea en "Historial de cambios" (la crea si no existe). Un problema acá
+// nunca tiene que impedir el cambio en sí.
+function registrarHistorial(accion, nombrePestana, id, antes, despues, queCambio) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let hoja = ss.getSheetByName(HOJA_HISTORIAL);
+    if (!hoja) {
+      hoja = ss.insertSheet(HOJA_HISTORIAL);
+      hoja.getRange(1, 1, 1, HISTORIAL_ENCABEZADOS.length).setValues([HISTORIAL_ENCABEZADOS]);
+      hoja.setFrozenRows(1);
+    }
+    hoja.appendRow([
+      new Date().toISOString(),
+      accion,
+      nombrePestana,
+      id,
+      queCambio || "",
+      antes ? JSON.stringify(antes) : "",
+      despues ? JSON.stringify(despues) : "",
+    ]);
+  } catch (err) {
+    Logger.log("No se pudo escribir el historial: " + err);
+  }
+}
+
+// Números de fila (2 en adelante) cuyo id coincide.
+function filasPorId(sheet, cfg, id) {
+  const colId = cfg.headers.indexOf("id") + 1;
+  const ultima = sheet.getLastRow();
+  const encontradas = [];
+  if (colId < 1 || !id || ultima < 2) return encontradas;
+  const ids = sheet.getRange(2, colId, ultima - 1, 1).getValues();
+  for (let i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) === String(id)) encontradas.push(i + 2);
+  }
+  return encontradas;
+}
+
+// Un contratista solo puede tocar filas con su nombre (sin acceso restringido: todas).
+function esDelContratista(cfg, valores, acceso) {
+  if (!acceso || !acceso.contratista) return true;
+  const i = cfg.headers.indexOf("contratistaNombre");
+  return i >= 0 && mismoNombre(valores[i], acceso.contratista);
+}
+
+function valorParaCelda(v) {
+  if (v === undefined || v === null) return "";
+  if (typeof v === "object") return JSON.stringify(v);
+  return v;
+}
+
+/**
+ * Reemplaza los datos de una fila ya cargada (la busca por id). No toca el id, la
+ * fecha de alta ni el link de la foto; un campo que el pedido no trae queda como estaba.
+ * Si la fila no existe (alguien la borró en la planilla) la agrega, para no perder
+ * lo que se cargó desde el celular.
+ */
+function actualizarRegistro(tipo, r, acceso) {
+  if (TIPOS_EDITABLES.indexOf(tipo) === -1) return respond({ ok: false, error: "tipo no editable: " + tipo });
+  r = r || {};
+  if (!r.id) return respond({ ok: false, error: "falta el id del registro" });
+  if (acceso && acceso.contratista) {
+    // Un contratista solo toca Fitosanitarios y siempre a su nombre.
+    if (tipo !== "aplicacionFitosanitaria") return respond({ ok: false, error: "no autorizado" });
+    r.contratistaNombre = acceso.contratista;
+  }
+  const cfg = SHEETS[tipo];
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(cfg.name);
+  if (!sheet) {
+    crearPestana(ss, cfg);
+    sheet = ss.getSheetByName(cfg.name);
+  }
+  const candado = LockService.getScriptLock();
+  candado.waitLock(30000);
+  try {
+    asegurarEncabezados(sheet, cfg);
+    const filas = filasPorId(sheet, cfg, r.id);
+    const n = cfg.headers.length;
+    if (filas.length === 0) {
+      const nueva = cfg.headers.map(function (h) {
+        if (h === "fechaSincronizacion") return new Date().toISOString();
+        return valorParaCelda(r[h]);
+      });
+      sheet.appendRow(nueva);
+      SpreadsheetApp.flush();
+      registrarHistorial("AGREGADO (no estaba en la planilla)", cfg.name, r.id, null, filaComoObjeto(cfg.headers, nueva), "");
+      return respond({ ok: true, agregado: true });
+    }
+    const rango = sheet.getRange(filas[0], 1, 1, n);
+    const antes = rango.getValues()[0];
+    if (!esDelContratista(cfg, antes, acceso)) return respond({ ok: false, error: "no autorizado" });
+    const despues = cfg.headers.map(function (h, i) {
+      if (h === "id" || h === "fechaSincronizacion") return antes[i];
+      if (h === "fechaCreacionRegistro") return antes[i] !== "" ? antes[i] : valorParaCelda(r[h]);
+      if (h === "fotoUrl") return antes[i] !== "" ? antes[i] : valorParaCelda(r[h]);
+      if (r[h] === undefined) return antes[i];
+      return valorParaCelda(r[h]);
+    });
+    const objAntes = filaComoObjeto(cfg.headers, antes);
+    const objDespues = filaComoObjeto(cfg.headers, despues);
+    const cambios = [];
+    cfg.headers.forEach(function (h) {
+      if (h === "fechaSincronizacion") return;
+      if (String(objAntes[h]) !== String(objDespues[h])) cambios.push(h + ": " + objAntes[h] + " → " + objDespues[h]);
+    });
+    if (cambios.length === 0) return respond({ ok: true, sinCambios: true });
+    rango.setValues([despues]);
+    // Fuerza a Google a aplicar la escritura ACÁ, dentro del try: si algo la rechaza
+    // (ej. una validación de datos de la columna) vuelve como mensaje legible.
+    SpreadsheetApp.flush();
+    registrarHistorial("EDITADO", cfg.name, r.id, objAntes, objDespues, cambios.join(" | "));
+    return respond({ ok: true, actualizado: true });
+  } finally {
+    candado.releaseLock();
+  }
+}
+
+/**
+ * Elimina de la planilla la fila con ese id (y las repetidas, si las hubiera), dejando
+ * una copia de cómo estaba en "Historial de cambios". Si ya no está, contesta ok igual
+ * (el celular solo necesita saber que la fila ya no existe).
+ */
+function eliminarRegistro(tipo, id, acceso) {
+  if (TIPOS_EDITABLES.indexOf(tipo) === -1) return respond({ ok: false, error: "tipo no editable: " + tipo });
+  if (!id) return respond({ ok: false, error: "falta el id del registro" });
+  if (acceso && acceso.contratista && tipo !== "aplicacionFitosanitaria") return respond({ ok: false, error: "no autorizado" });
+  const cfg = SHEETS[tipo];
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(cfg.name);
+  if (!sheet) return respond({ ok: true, noEncontrada: true });
+  const candado = LockService.getScriptLock();
+  candado.waitLock(30000);
+  try {
+    const n = cfg.headers.length;
+    const filas = filasPorId(sheet, cfg, id).filter(function (fila) {
+      return esDelContratista(cfg, sheet.getRange(fila, 1, 1, n).getValues()[0], acceso);
+    });
+    if (filas.length === 0) return respond({ ok: true, noEncontrada: true });
+    // Se guarda en el historial ANTES de borrar.
+    filas.forEach(function (fila) {
+      const valores = sheet.getRange(fila, 1, 1, n).getValues()[0];
+      registrarHistorial("ELIMINADO", cfg.name, id, filaComoObjeto(cfg.headers, valores), null, "");
+    });
+    // De abajo hacia arriba para que los números de fila no se corran.
+    filas.slice().reverse().forEach(function (fila) { sheet.deleteRow(fila); });
+    SpreadsheetApp.flush();
+    return respond({ ok: true, eliminadas: filas.length });
+  } finally {
+    candado.releaseLock();
+  }
+}
+
 function responderMaestros() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const maestros = {};
@@ -660,6 +875,62 @@ function responderRegistros() {
     registros[key] = sheet ? leerPestana(sheet, cfg.headers) : [];
   });
   return respond({ ok: true, registros: registros });
+}
+
+/**
+ * Si la pestaña tiene menos columnas que las que ahora define la app (se agregó una
+ * al final, ej. el 3er origen), crea las que faltan y escribe sus títulos en la fila
+ * 1. Solo completa encabezados vacíos: no cambia ni mueve nada de lo ya cargado.
+ */
+function asegurarEncabezados(sheet, cfg) {
+  const n = cfg.headers.length;
+  if (sheet.getMaxColumns() < n) sheet.insertColumnsAfter(sheet.getMaxColumns(), n - sheet.getMaxColumns());
+  const actual = sheet.getRange(1, 1, 1, n).getValues()[0];
+  for (let i = 0; i < n; i++) {
+    if (String(actual[i]).trim() === "") sheet.getRange(1, i + 1).setValue(cfg.headers[i]);
+  }
+}
+
+/**
+ * Limpieza para correr UNA vez a mano desde el editor (▶): en cada pestaña borra
+ * las filas repetidas (mismo id), dejando la primera. Solo borra una fila si es
+ * idéntica a la primera salvo la fecha de sincronización; si difiere en algo, no la
+ * toca y la avisa. Muestra el resumen en pantalla y en Ver → Registros.
+ */
+function eliminarDuplicadosPorId() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const resumen = [];
+  Object.keys(SHEETS).forEach(function (key) {
+    const cfg = SHEETS[key];
+    const sheet = ss.getSheetByName(cfg.name);
+    const colId = cfg.headers.indexOf("id");
+    if (!sheet || colId < 0 || sheet.getLastRow() < 2) return;
+    const colSync = cfg.headers.indexOf("fechaSincronizacion");
+    const columnas = Math.min(cfg.headers.length, sheet.getLastColumn());
+    const valores = sheet.getRange(2, 1, sheet.getLastRow() - 1, columnas).getValues();
+    const vistos = {};
+    const borrar = [];
+    valores.forEach(function (fila, i) {
+      const id = String(fila[colId]).trim();
+      if (!id) return;
+      if (vistos[id] === undefined) {
+        vistos[id] = i;
+        return;
+      }
+      const primera = valores[vistos[id]];
+      const igual = fila.every(function (v, c) { return c === colSync || String(v) === String(primera[c]); });
+      if (igual) borrar.push(i + 2);
+      else resumen.push(cfg.name + ": la fila " + (i + 2) + " repite el id de la fila " + (vistos[id] + 2) + " pero tiene datos distintos: NO se tocó.");
+    });
+    borrar.reverse().forEach(function (n) { sheet.deleteRow(n); });
+    if (borrar.length) resumen.push(cfg.name + ": " + borrar.length + " fila(s) repetida(s) borrada(s).");
+  });
+  const texto = resumen.length ? resumen.join("\n") : "No había filas repetidas.";
+  Logger.log(texto);
+  try {
+    SpreadsheetApp.getActive().toast(texto.replace(/\n/g, " · "), "Duplicados", 10);
+  } catch (e) {}
+  return texto;
 }
 
 function leerPestana(sheet, headers) {

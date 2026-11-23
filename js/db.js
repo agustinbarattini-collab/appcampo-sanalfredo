@@ -1,7 +1,7 @@
 import { APP_CONFIG } from "./config.js";
 
 const DB_NAME = `appcampo_${APP_CONFIG.empresaId}`;
-const DB_VERSION = 9;
+const DB_VERSION = 10;
 
 const STORES = {
   lotes: "id",
@@ -22,6 +22,9 @@ const STORES = {
   // Depósitos/galpones para llevar stock de Insumos desglosado por lugar
   // físico (LCDP, 2026-08-21) — vacío/no usado en empresas de un solo pool.
   galpones: "id",
+  // Cola de cambios a subir a la planilla: ediciones y eliminaciones de
+  // registros que ya estaban sincronizados (ver cambios.js). Clave: "tipo:id".
+  cambiosPendientes: "clave",
 };
 
 const STORES_ELIMINADOS = ["productosSiembra"];

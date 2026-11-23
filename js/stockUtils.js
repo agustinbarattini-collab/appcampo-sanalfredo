@@ -37,9 +37,11 @@ async function getSilosBolsaConStock() {
     let usado = 0;
     for (const c of cargas) {
       const kgOrigen2 = c.kgOrigen2 || 0;
-      const kgOrigen1 = (c.kgNeto || 0) - kgOrigen2;
+      const kgOrigen3 = c.kgOrigen3 || 0;
+      const kgOrigen1 = (c.kgNeto || 0) - kgOrigen2 - kgOrigen3;
       if (c.origenTipo === "silo" && ids.includes(c.origenId)) usado += kgOrigen1;
       if (c.origen2Tipo === "silo" && ids.includes(c.origen2Id)) usado += kgOrigen2;
+      if (c.origen3Tipo === "silo" && ids.includes(c.origen3Id)) usado += kgOrigen3;
     }
 
     const kgTotalInicial = miembros.reduce((sum, m) => sum + (m.kgTotalInicial || 0), 0);

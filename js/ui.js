@@ -47,4 +47,17 @@ function parseNumero(valor) {
   return Number.isNaN(n) ? 0 : n;
 }
 
-export { toast, formatearFechaCorta, parseNumero };
+// Deja elegida una opción en un desplegable aunque ya no figure en la lista (por ejemplo
+// una orden ya completada, o un maestro que cambió) — se usa al corregir un registro.
+function asegurarOpcion(select, id, nombre) {
+  if (!id) return;
+  if (![...select.options].some((o) => o.value === id)) {
+    const op = document.createElement("option");
+    op.value = id;
+    op.textContent = nombre || "(ya no está en Maestros)";
+    select.appendChild(op);
+  }
+  select.value = id;
+}
+
+export { toast, formatearFechaCorta, parseNumero, asegurarOpcion };

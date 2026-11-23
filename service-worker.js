@@ -1,4 +1,4 @@
-const CACHE_NAME = "appcampo-sanalfredo-v27";
+const CACHE_NAME = "appcampo-sanalfredo-v28";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -8,6 +8,7 @@ const APP_SHELL = [
   "./js/db.js",
   "./js/app.js",
   "./js/sync.js",
+  "./js/cambios.js",
   "./js/geoLotes.js",
   "./js/lotesGeo.js",
   "./js/zonaOrden.js",

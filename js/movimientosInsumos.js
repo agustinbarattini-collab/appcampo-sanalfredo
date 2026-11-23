@@ -1,8 +1,12 @@
-import { dbGetAll, dbPut, dbDelete, uid } from "./db.js";
+import { dbGetAll, dbPut, uid } from "./db.js";
+import { guardarEdicion, eliminarRegistro, listarCambios, claveDe } from "./cambios.js";
 import { getInsumosConStock, getStockPorGalpon, getSaldoInsumosPendientes } from "./stockUtils.js";
-import { toast, parseNumero, formatearFechaCorta } from "./ui.js";
+import { toast, parseNumero, formatearFechaCorta, asegurarOpcion } from "./ui.js";
 
 const STORE = "movimientosInsumos";
+
+// Movimiento que se está corrigiendo (null = formularios de siempre).
+let editando = null;
 
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -120,6 +124,7 @@ const movimientosInsumosView = {
       btn.classList.toggle("active", btn.dataset.tipo === this.state.tipo);
       btn.addEventListener("click", () => {
         this.state.tipo = btn.dataset.tipo;
+        editando = null;
         this.render(container);
       });
     });
@@ -127,7 +132,12 @@ const movimientosInsumosView = {
     const ctx = { insumos, proveedores, contratistas, saldoInsumosPendientes, galpones, stockPorGalpon };
     const formArea = container.querySelector("#formArea");
 
-    if (this.state.tipo === "ingreso") {
+    if (editando) {
+      renderFormEdicion(container, formArea, editando, ctx, () => {
+        editando = null;
+        this.render(container);
+      });
+    } else if (this.state.tipo === "ingreso") {
       renderFormIngreso(container, formArea, ctx, () => this.render(container));
     } else if (this.state.tipo === "salida") {
       renderFormSalida(container, formArea, ctx, () => this.render(container));
@@ -582,9 +592,112 @@ function renderFormMovimiento(container, formArea, { insumos, galpones, stockPor
   });
 }
 
+// Corrección de un movimiento ya guardado: se cambian los datos que suelen estar mal (fecha,
+// insumo, cantidad, contratista/proveedor, galpón, observaciones). El tipo no se cambia y la
+// foto del remito queda como estaba. No se vuelve a avisar por stock: es una corrección.
+function renderFormEdicion(container, formArea, m, { insumos, proveedores, contratistas, galpones }, onDone) {
+  const conGalpones = galpones.length > 0;
+  const etiquetas = { ingreso: "ingreso", salida: "salida", devolucion: "devolución", movimiento: "movimiento" };
+  const esMov = m.tipo === "movimiento";
+  const esTransf = esMov && m.subtipoMovimiento === "transferencia";
+  const selGalpon = (id, etiqueta) =>
+    `<div class="field"><label>${etiqueta}</label><select id="${id}">${optsGalpones(galpones, "Seleccionar...")}</select></div>`;
+  formArea.innerHTML = `
+    <div class="card" style="border:2px solid var(--color-primario);">
+      <strong>Estás corrigiendo un ${etiquetas[m.tipo] || "movimiento"} ya guardado</strong>
+      <div class="muted">${formatearFechaCorta(m.fecha)} · ${m.insumoNombre} · ${m.cantidad} ${m.unidad || ""}. Cambiá lo que esté mal y tocá "Guardar cambios".</div>
+    </div>
+    <form id="formEdicion">
+      <div class="field"><label>Fecha</label><input type="date" id="eFecha" required /></div>
+      ${m.tipo === "ingreso" ? '<div class="field"><label>Proveedor</label><select id="eProveedor" required></select></div>' : ""}
+      ${m.tipo === "salida" || m.tipo === "devolucion" ? '<div class="field"><label>Contratista</label><select id="eContratista" required></select></div>' : ""}
+      <div class="field"><label>Insumo</label><select id="eInsumo" required></select></div>
+      <div class="field"><label>Cantidad</label><input type="text" inputmode="decimal" id="eCantidad" required /></div>
+      ${conGalpones && !esMov ? selGalpon("eGalpon", "Galpón") : ""}
+      ${esTransf ? selGalpon("eGalponOrigen", "Galpón de origen") + selGalpon("eGalponDestino", "Galpón de destino") : ""}
+      ${esMov && !esTransf ? selGalpon("eGalpon", "Galpón ajustado") + `<div class="field"><label>Diferencia</label><select id="eTipoDiferencia"><option value="falta">Falta</option><option value="sobra">Sobra</option></select></div>` : ""}
+      <div class="field"><label>Observaciones</label><textarea id="eObs"></textarea></div>
+      <button type="submit">Guardar cambios</button>
+      <button type="button" class="secondary" id="btnCancelarEdicion" style="margin-top:8px;">Cancelar corrección</button>
+    </form>
+  `;
+  const q = (sel) => container.querySelector(sel);
+  q("#eFecha").value = String(m.fecha || today()).slice(0, 10);
+  const llenar = (sel, lista, id, nombre) => {
+    const el = q(sel);
+    if (!el) return;
+    el.innerHTML = '<option value="">Seleccionar...</option>' + opts(lista);
+    asegurarOpcion(el, id, nombre);
+  };
+  llenar("#eProveedor", proveedores, m.proveedorId, m.proveedorNombre);
+  llenar("#eContratista", contratistas, m.contratistaId, m.contratistaNombre);
+  llenar("#eInsumo", insumos, m.insumoId, m.insumoNombre);
+  q("#eCantidad").value = String(m.cantidad ?? "");
+  const fijarGalpon = (sel, id, nombre) => {
+    const el = q(sel);
+    if (el) asegurarOpcion(el, id, nombre);
+  };
+  fijarGalpon("#eGalpon", m.galponId, m.galponNombre);
+  fijarGalpon("#eGalponOrigen", m.galponId, m.galponNombre);
+  fijarGalpon("#eGalponDestino", m.galponDestinoId, m.galponDestinoNombre);
+  if (q("#eTipoDiferencia")) q("#eTipoDiferencia").value = m.tipoDiferencia === "sobra" ? "sobra" : "falta";
+  q("#eObs").value = m.observaciones || "";
+  q("#btnCancelarEdicion").addEventListener("click", onDone);
+  formArea.scrollIntoView({ block: "start" });
+
+  q("#formEdicion").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const cantidad = parseNumero(q("#eCantidad").value);
+    const insumo = insumos.find((i) => i.id === q("#eInsumo").value);
+    if (!insumo || cantidad <= 0) return;
+    const nombreGalpon = (id) => (galpones.find((g) => g.id === id) || {}).nombre || "";
+    const corregido = {
+      ...m,
+      fecha: q("#eFecha").value,
+      insumoId: insumo.id,
+      insumoNombre: insumo.nombre,
+      unidad: insumo.unidad || "",
+      cantidad,
+      observaciones: q("#eObs").value.trim(),
+    };
+    if (m.tipo === "ingreso") {
+      const prov = proveedores.find((p) => p.id === q("#eProveedor").value);
+      if (!prov && !q("#eProveedor").value) return;
+      corregido.proveedorId = q("#eProveedor").value;
+      corregido.proveedorNombre = prov ? prov.nombre : m.proveedorNombre;
+    }
+    if (m.tipo === "salida" || m.tipo === "devolucion") {
+      const con = contratistas.find((c) => c.id === q("#eContratista").value);
+      if (!con && !q("#eContratista").value) return;
+      corregido.contratistaId = q("#eContratista").value;
+      corregido.contratistaNombre = con ? con.nombre : m.contratistaNombre;
+    }
+    if (q("#eGalpon")) {
+      corregido.galponId = q("#eGalpon").value || null;
+      corregido.galponNombre = nombreGalpon(q("#eGalpon").value) || (q("#eGalpon").value === m.galponId ? m.galponNombre : "");
+    }
+    if (esTransf) {
+      if (q("#eGalponOrigen").value === q("#eGalponDestino").value) {
+        alert("El galpón de origen y destino no pueden ser el mismo.");
+        return;
+      }
+      corregido.galponId = q("#eGalponOrigen").value || null;
+      corregido.galponNombre = nombreGalpon(q("#eGalponOrigen").value) || m.galponNombre;
+      corregido.galponDestinoId = q("#eGalponDestino").value || null;
+      corregido.galponDestinoNombre = nombreGalpon(q("#eGalponDestino").value) || m.galponDestinoNombre;
+    }
+    if (q("#eTipoDiferencia")) corregido.tipoDiferencia = q("#eTipoDiferencia").value;
+    await guardarEdicion(STORE, "movimientoInsumo", corregido);
+    window.dispatchEvent(new Event("appcampo-sync-now"));
+    toast("Movimiento corregido.");
+    onDone();
+  });
+}
+
 async function renderListadoMovs(container) {
   const lista = container.querySelector("#listaMovs");
   const movs = (await dbGetAll(STORE)).sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""));
+  const cambiosEnCola = new Map((await listarCambios()).map((x) => [x.clave, x]));
   if (movs.length === 0) {
     lista.innerHTML = '<div class="empty-state">Todavía no registraste movimientos.</div>';
     return;
@@ -607,21 +720,36 @@ async function renderListadoMovs(container) {
       : m.foto
       ? " · Foto pendiente de subir"
       : "";
+    const cambio = cambiosEnCola.get(claveDe("movimientoInsumo", m.id));
+    const correccionPendiente = m.sincronizado && cambio && cambio.accion === "editar";
+    const errorTxt = cambio && cambio.error ? `<div class="muted" style="color:#c0392b;">No se pudo subir la corrección: ${cambio.error}</div>` : "";
     row.innerHTML = `
       <div>
         <div><span class="pill">${etiquetas[m.tipo]}</span> <strong>${m.insumoNombre}</strong> — ${m.cantidad} ${m.unidad || ""}</div>
         <div class="muted">${formatearFechaCorta(m.fecha)} · ${detalle}${fotoTxt}</div>
+        ${errorTxt}
       </div>
       <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
-        <span class="pill ${m.sincronizado ? "sincronizado" : "pendiente"}">${m.sincronizado ? "Sincronizado" : "Pendiente"}</span>
-        <button class="danger" data-id="${m.id}">Borrar</button>
+        <span class="pill ${m.sincronizado && !correccionPendiente ? "sincronizado" : "pendiente"}">${correccionPendiente ? "Corrección pendiente" : m.sincronizado ? "Sincronizado" : "Pendiente"}</span>
+        <button class="secondary" data-accion="editar">Editar</button>
+        <button class="danger" data-accion="eliminar">Eliminar</button>
       </div>
     `;
-    row.querySelector("button").addEventListener("click", async () => {
-      if (confirm("¿Borrar este movimiento?")) {
-        await dbDelete(STORE, m.id);
-        movimientosInsumosView.render(container);
-      }
+    row.querySelector('[data-accion="editar"]').addEventListener("click", () => {
+      editando = m;
+      movimientosInsumosView.state.tipo = m.tipo;
+      movimientosInsumosView.render(container);
+    });
+    row.querySelector('[data-accion="eliminar"]').addEventListener("click", async () => {
+      const resumen = `${etiquetas[m.tipo]} · ${formatearFechaCorta(m.fecha)} · ${m.insumoNombre} · ${m.cantidad} ${m.unidad || ""}`;
+      const aviso = m.sincronizado
+        ? "\n\nSe elimina también de la planilla (queda una copia en la pestaña \"Historial de cambios\")."
+        : "";
+      if (!confirm(`¿Eliminar este movimiento?\n\n${resumen}${aviso}`)) return;
+      await eliminarRegistro(STORE, "movimientoInsumo", m.id);
+      if (editando && editando.id === m.id) editando = null;
+      window.dispatchEvent(new Event("appcampo-sync-now"));
+      movimientosInsumosView.render(container);
     });
     lista.appendChild(row);
   }

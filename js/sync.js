@@ -1,5 +1,6 @@
-import { dbGetAll, dbPut, uid } from "./db.js";
+import { dbGetAll, dbGet, dbPut, dbDelete, uid } from "./db.js";
 import { APP_CONFIG } from "./config.js";
+import { STORE_CAMBIOS, listarCambios, quitarCambio, claveDe } from "./cambios.js";
 
 function flattenCarga(r) {
   return {
@@ -49,11 +50,14 @@ const MAX_PRODUCTOS = APP_CONFIG.maxProductos || 6;
 
 function flattenAplicacion(r) {
   const out = { ...r };
-  (r.productos || []).forEach((p, i) => {
-    out[`producto${i + 1}Nombre`] = p.productoNombre;
-    out[`producto${i + 1}Cantidad`] = p.cantidad;
-    out[`producto${i + 1}Unidad`] = p.unidad;
-  });
+  // Se mandan TODAS las posiciones (las que sobran, vacías): si al corregir una
+  // aplicación se saca un producto, la planilla tiene que borrar esa celda.
+  for (let i = 0; i < MAX_PRODUCTOS; i++) {
+    const p = (r.productos || [])[i];
+    out[`producto${i + 1}Nombre`] = p ? p.productoNombre : "";
+    out[`producto${i + 1}Cantidad`] = p ? p.cantidad : "";
+    out[`producto${i + 1}Unidad`] = p ? p.unidad : "";
+  }
   out.productos = undefined;
   return out;
 }
@@ -106,6 +110,16 @@ const TIPOS = [
 ];
 
 let syncing = false;
+// Se incrementa al empezar y al terminar cada sincronización: pullAll() lo usa para
+// descartar una lectura de la planilla que quedó vieja porque en el medio se subió algo.
+let epocaSync = 0;
+
+// Lo que se manda a la planilla no incluye datos internos de la app.
+function limpiarPayload(payload) {
+  delete payload.huellaSheet;
+  delete payload.sincronizadoEn;
+  return payload;
+}
 
 async function contarPendientes() {
   let total = 0;
@@ -116,6 +130,15 @@ async function contarPendientes() {
   // Zonas a aplicar marcadas en la app que todavía no se subieron a la Sheet.
   const ordenes = await dbGetAll("ordenesTrabajo");
   total += ordenes.filter((o) => o.zonaPendiente).length;
+  // Ediciones y eliminaciones esperando subir (ver cambios.js). Una edición de un
+  // registro que todavía no se subió ya se cuenta arriba (va a subir con los datos nuevos).
+  for (const c of await listarCambios()) {
+    if (c.accion === "editar") {
+      const r = await dbGet(c.store, c.id);
+      if (!r || !r.sincronizado) continue;
+    }
+    total++;
+  }
   return total;
 }
 
@@ -212,19 +235,73 @@ async function subirZonasPendientes() {
   return { ocupado: false, resultados };
 }
 
+// Helpers para anotar un cambio desde acá (cambios.js ya los tiene, pero sin dependencia circular).
+async function anotarEdicion(store, tipo, id) {
+  const clave = claveDe(tipo, id);
+  const previo = await dbGet(STORE_CAMBIOS, clave);
+  if (previo && previo.accion === "eliminar") return;
+  await dbPut(STORE_CAMBIOS, { clave, store, tipo, id, accion: "editar", version: Date.now() + Math.random(), error: "" });
+}
+
+async function anotarEliminacion(store, tipo, id) {
+  await dbPut(STORE_CAMBIOS, { clave: claveDe(tipo, id), store, tipo, id, accion: "eliminar", version: Date.now() + Math.random(), error: "" });
+}
+
+// Sube las ediciones y eliminaciones anotadas (ver cambios.js). Cada una se saca de
+// la cola recién cuando la planilla confirma; si falla queda para el próximo intento.
+async function subirCambiosPendientes() {
+  const flattens = Object.fromEntries(TIPOS.map((t) => [t.tipo, t.flatten]));
+  const cambios = (await listarCambios()).sort((a, b) => a.version - b.version);
+  for (const c of cambios) {
+    const guardarError = async (mensaje) => {
+      const actual = await dbGet(STORE_CAMBIOS, c.clave);
+      if (actual) await dbPut(STORE_CAMBIOS, { ...actual, error: mensaje });
+    };
+    try {
+      let data;
+      if (c.accion === "eliminar") {
+        data = await llamarBackend({ accion: "eliminarRegistro", tipo: c.tipo, id: c.id });
+      } else {
+        const registro = await dbGet(c.store, c.id);
+        if (!registro) {
+          // Se eliminó después de editarlo: ya hay una eliminación en la cola que manda.
+          await quitarCambio(c.clave);
+          continue;
+        }
+        // Si todavía no se subió como registro nuevo, se espera: va a subir con los datos ya corregidos.
+        if (!registro.sincronizado) continue;
+        data = await llamarBackend({ accion: "actualizarRegistro", tipo: c.tipo, registro: limpiarPayload(flattens[c.tipo](registro)) });
+      }
+      if (data.ok) {
+        // Si mientras subía se volvió a tocar (versión distinta), se deja para otra vuelta.
+        const actual = await dbGet(STORE_CAMBIOS, c.clave);
+        if (actual && actual.version === c.version) await quitarCambio(c.clave);
+      } else {
+        const mensaje = String(data.error || "la planilla lo rechazó");
+        console.warn("La planilla rechazó un cambio:", c.tipo, c.id, mensaje);
+        await guardarError(mensaje);
+      }
+    } catch (err) {
+      console.warn("No se pudo subir un cambio (sin conexión real o error de red):", c.tipo, c.id, err);
+      await guardarError(describirErrorDeRed(err));
+    }
+  }
+}
+
 async function syncAll(onProgress) {
   if (syncing) return;
   if (!navigator.onLine) return;
   if (!APP_CONFIG.sheetsWebAppUrl) return;
 
   syncing = true;
+  epocaSync++;
   try {
     for (const { store, tipo, flatten } of TIPOS) {
       const items = await dbGetAll(store);
       const pendientes = items.filter((r) => !r.sincronizado);
       for (const registro of pendientes) {
         try {
-          const payload = flatten(registro);
+          const payload = limpiarPayload(flatten(registro));
           if (registro.foto && !registro.fotoUrl) {
             try {
               payload.fotoBase64 = await comprimirFotoABase64(registro.foto);
@@ -234,9 +311,19 @@ async function syncAll(onProgress) {
           }
           const data = await llamarBackend({ tipo, registro: payload });
           if (data.ok) {
-            registro.sincronizado = true;
-            if (data.fotoUrl) registro.fotoUrl = data.fotoUrl;
-            await dbPut(store, registro);
+            // Se vuelve a leer el registro: mientras se subía (puede tardar si hay mala
+            // señal) alguien pudo corregirlo o eliminarlo desde la pantalla.
+            const fresco = await dbGet(store, registro.id);
+            if (!fresco) {
+              await anotarEliminacion(store, tipo, registro.id);
+            } else {
+              const huboEdicion = JSON.stringify({ ...fresco, sincronizado: 0 }) !== JSON.stringify({ ...registro, sincronizado: 0 });
+              fresco.sincronizado = true;
+              fresco.sincronizadoEn = Date.now();
+              if (data.fotoUrl && !fresco.fotoUrl) fresco.fotoUrl = data.fotoUrl;
+              await dbPut(store, fresco);
+              if (huboEdicion) await anotarEdicion(store, tipo, registro.id);
+            }
           } else {
             console.warn("Sync rechazado por el servidor:", tipo, data.error);
           }
@@ -247,8 +334,10 @@ async function syncAll(onProgress) {
       }
     }
     await subirZonasPendientes();
+    await subirCambiosPendientes();
   } finally {
     syncing = false;
+    epocaSync++;
   }
   if (onProgress) await onProgress();
 }
@@ -519,6 +608,19 @@ async function unflattenCarga(fila) {
     origen2Nombre = String(fila.origen2Nombre).trim();
   }
 
+  let origen3Tipo = "";
+  let origen3Id = null;
+  let origen3Nombre = "";
+  if (fila.origen3Nombre) {
+    origen3Tipo = fila.origen3Tipo === "silo" ? "silo" : "lote";
+    origen3Id = await resolverIdPorNombre(
+      origen3Tipo === "silo" ? "silosBolsa" : "lotes",
+      fila.origen3Nombre,
+      origen3Tipo === "silo" ? { cultivo: "", kgTotalInicial: 0 } : {}
+    );
+    origen3Nombre = String(fila.origen3Nombre).trim();
+  }
+
   const corredorId = await resolverIdPorNombre("corredores", fila.corredorNombre);
   const gps = fila.gpsLat || fila.gpsLng ? { lat: parseFloat(fila.gpsLat) || 0, lng: parseFloat(fila.gpsLng) || 0 } : null;
   return {
@@ -533,6 +635,10 @@ async function unflattenCarga(fila) {
     origen2Id,
     origen2Nombre,
     kgOrigen2: parseFloat(fila.kgOrigen2) || 0,
+    origen3Tipo,
+    origen3Id,
+    origen3Nombre,
+    kgOrigen3: parseFloat(fila.kgOrigen3) || 0,
     cultivo: fila.cultivo || "",
     ctg: fila.ctg || "",
     chofer: fila.chofer || "",
@@ -546,6 +652,7 @@ async function unflattenCarga(fila) {
     observaciones: fila.observaciones || "",
     gps,
     foto: null,
+    fotoUrl: fila.fotoUrl || "",
     sincronizado: true,
     fechaCreacionRegistro: fila.fechaCreacionRegistro || new Date().toISOString(),
   };
@@ -574,7 +681,7 @@ async function unflattenMovimiento(fila) {
   };
   if (fila.tipo === "ingreso") {
     const proveedorId = await resolverIdPorNombre("proveedores", fila.proveedorNombre);
-    return { ...base, proveedorId, proveedorNombre: String(fila.proveedorNombre || "").trim(), foto: null };
+    return { ...base, proveedorId, proveedorNombre: String(fila.proveedorNombre || "").trim(), foto: null, fotoUrl: fila.fotoUrl || "" };
   }
   // "movimiento": transferencia entre galpones o ajuste por diferencia (ver
   // Insumos → Movimiento) — nunca afecta la cuenta de un contratista ni
@@ -777,10 +884,22 @@ const TIPOS_PULL = [
   { tipo: "ordenTrabajo", store: "ordenesTrabajo", unflatten: unflattenOrdenTrabajo },
 ];
 
+// Tipos cuyas correcciones y eliminaciones se reflejan también en los OTROS celulares:
+// si alguien edita o elimina una fila (desde un celular o directo en la planilla), al
+// traer los registros este celular actualiza o saca su copia. Los demás tipos solo
+// agregan lo nuevo, como siempre.
+const TIPOS_RECONCILIAR = new Set(["cargaGranos", "movimientoInsumo", "aplicacionFitosanitaria"]);
+
+// Si faltan más registros que esto de golpe, se asume que algo anda mal con la lectura
+// (pestaña renombrada, planilla reemplazada) y NO se borra nada del celular.
+const MAX_BORRADOS_POR_LECTURA = 5;
+
 async function pullAll() {
   if (!navigator.onLine) return;
   if (!APP_CONFIG.sheetsWebAppUrl) return;
 
+  const inicio = Date.now();
+  const epocaInicio = epocaSync;
   let data;
   try {
     data = await llamarBackend({ accion: "leerRegistros" });
@@ -792,12 +911,25 @@ async function pullAll() {
     console.warn("La planilla rechazó el pedido de registros:", data.error);
     return;
   }
+  // Si mientras esperaba la respuesta se subió o se cambió algo, esta lectura puede
+  // estar vieja (no incluir lo recién subido): se descarta y se vuelve a intentar la
+  // próxima vez, antes que borrar o pisar algo por error.
+  if (syncing || epocaSync !== epocaInicio) {
+    console.warn("Se descarta la lectura de la planilla: hubo una sincronización en el medio.");
+    return;
+  }
+
+  const cambiosEnCola = await listarCambios();
 
   for (const { tipo, store, unflatten } of TIPOS_PULL) {
     const filas = data.registros[tipo] || [];
     if (filas.length === 0) continue;
     const existentes = await dbGetAll(store);
-    const idsExistentes = new Set(existentes.map((e) => e.id));
+    const porId = new Map(existentes.map((e) => [e.id, e]));
+    // Ids con una edición o eliminación esperando subir: la planilla todavía tiene la
+    // versión vieja, no hay que traerla de vuelta ni pisar lo que se corrigió acá.
+    const idsEnCola = new Set(cambiosEnCola.filter((c) => c.tipo === tipo).map((c) => c.id));
+    const reconciliar = TIPOS_RECONCILIAR.has(tipo);
     for (const fila of filas) {
       // "ordenTrabajo" es distinto a los demás tipos: el asesor no tipea un
       // id (esa columna la llena el sistema, ver aplicarValidacionOrdenesTrabajo
@@ -808,14 +940,59 @@ async function pullAll() {
       // se deja que unflattenOrdenTrabajo decida si es nueva o ya existía.
       if (tipo === "ordenTrabajo") {
         if (!fila.nombre) continue;
-      } else if (!fila.id || idsExistentes.has(fila.id)) {
+      } else if (!fila.id || idsEnCola.has(String(fila.id))) {
+        continue;
+      }
+      const local = porId.get(fila.id);
+      if (tipo !== "ordenTrabajo" && local) {
+        if (!reconciliar || !local.sincronizado) continue;
+        // Ya está acá: solo se actualiza si la fila de la planilla cambió desde la última vez.
+        const huella = JSON.stringify(fila);
+        if (local.huellaSheet === huella) continue;
+        try {
+          const nuevo = await unflatten(fila);
+          const fusionado = {
+            ...local,
+            ...nuevo,
+            // Lo que la planilla no trae queda como estaba en este celular.
+            foto: local.foto || null,
+            fotoUrl: nuevo.fotoUrl || local.fotoUrl,
+            fechaCreacionRegistro: local.fechaCreacionRegistro,
+            sincronizado: true,
+            huellaSheet: huella,
+          };
+          if (String(nuevo.fecha || "").slice(0, 10) === String(local.fecha || "").slice(0, 10)) fusionado.fecha = local.fecha;
+          if (JSON.stringify(fusionado) !== JSON.stringify(local)) await dbPut(store, fusionado);
+        } catch (err) {
+          console.warn("No se pudo actualizar un registro:", tipo, fila.id, err);
+        }
         continue;
       }
       try {
         const registro = await unflatten(fila);
+        if (reconciliar) registro.huellaSheet = JSON.stringify(fila);
         await dbPut(store, registro);
       } catch (err) {
         console.warn("No se pudo traer un registro:", tipo, fila.id, err);
+      }
+    }
+
+    // Registros que figuran sincronizados pero ya no están en la planilla: alguien los
+    // eliminó (desde otro celular o a mano en la planilla) — se sacan de este también.
+    if (reconciliar) {
+      const idsPlanilla = new Set(filas.map((f) => String(f.id)));
+      const sobran = existentes.filter(
+        (e) =>
+          e.sincronizado &&
+          !idsPlanilla.has(String(e.id)) &&
+          !idsEnCola.has(String(e.id)) &&
+          // Recién subido por este celular: la lectura pudo haberse armado un instante antes.
+          !(e.sincronizadoEn && e.sincronizadoEn >= inicio - 120000)
+      );
+      if (sobran.length > MAX_BORRADOS_POR_LECTURA) {
+        console.warn(`Faltan ${sobran.length} registros de ${tipo} en la planilla: no se borran de este celular por seguridad.`);
+      } else {
+        for (const e of sobran) await dbDelete(store, e.id);
       }
     }
   }
