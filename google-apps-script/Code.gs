@@ -604,6 +604,7 @@ function doPost(e) {
     // así el celular lo da por sincronizado y deja de reenviarlo).
     const candado = LockService.getScriptLock();
     candado.waitLock(30000);
+    let avisarAplicacion = false;
     try {
       asegurarEncabezados(sheet, cfg);
       const colId = cfg.headers.indexOf("id") + 1;
@@ -631,13 +632,89 @@ function doPost(e) {
         return v;
       });
       sheet.appendRow(row);
+      // Solo las aplicaciones fitosanitarias nuevas avisan por mail (no los duplicados
+      // de arriba, ni las correcciones/eliminaciones, ni insumos ni cargas).
+      avisarAplicacion = body.tipo === "aplicacionFitosanitaria";
       return respond({ ok: true, fotoUrl: fotoUrl });
     } finally {
       candado.releaseLock();
+      // Fuera del candado para no hacer esperar a otros celulares mientras sale el mail.
+      if (avisarAplicacion) enviarAvisoAplicacion(r);
     }
   } catch (err) {
     return respond({ ok: false, error: String(err) });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Aviso por mail cuando llega una aplicación fitosanitaria desde la app
+// ---------------------------------------------------------------------------
+
+// A quién se avisa. Dejar "" para que le llegue a la cuenta de Google dueña de esta
+// planilla; o poner uno o varios mails separados por coma: "a@gmail.com, b@gmail.com".
+const EMAIL_AVISO_APLICACIONES = "";
+
+// Nunca rompe el guardado: si el mail falla (permiso, tope diario), la aplicación ya
+// quedó en la planilla y el error solo se anota en el registro de ejecuciones.
+function enviarAvisoAplicacion(r) {
+  try {
+    const destino = String(EMAIL_AVISO_APLICACIONES || "").trim() || Session.getEffectiveUser().getEmail();
+    if (!destino) return;
+    if (MailApp.getRemainingDailyQuota() < 1) return;
+
+    const productos = [];
+    for (let i = 1; i <= 7; i++) {
+      const nombre = r["producto" + i + "Nombre"];
+      if (!nombre) continue;
+      const cant = r["producto" + i + "Cantidad"];
+      const unidad = r["producto" + i + "Unidad"];
+      productos.push("  • " + nombre + (cant !== undefined && cant !== null && cant !== "" ? ": " + cant + (unidad ? " " + unidad : "") : ""));
+    }
+    const fecha = formatearFechaAviso(r.fecha);
+    const lote = r.loteNombre || "(sin lote)";
+    const lineas = [
+      "Se registró una aplicación de fitosanitarios desde la app.",
+      "",
+      "Fecha: " + fecha,
+      "Lote: " + lote + (r.hectareas ? " (" + r.hectareas + " has)" : ""),
+      "Contratista: " + (r.contratistaNombre || "-"),
+    ];
+    if (r.ordenTrabajoNombre) lineas.push("Orden de trabajo: " + r.ordenTrabajoNombre);
+    lineas.push("", "Productos:");
+    lineas.push(productos.length ? productos.join("\n") : "  (sin productos cargados)");
+    if (r.comentarios) lineas.push("", "Comentarios: " + r.comentarios);
+    lineas.push("", "Planilla: " + SpreadsheetApp.getActiveSpreadsheet().getUrl());
+
+    MailApp.sendEmail({
+      to: destino,
+      subject: EMPRESA_NOMBRE + " – Aplicación fitosanitaria: " + lote + " (" + fecha + ")",
+      body: lineas.join("\n"),
+      name: "App de Campo " + EMPRESA_NOMBRE,
+    });
+  } catch (err) {
+    console.error("No se pudo enviar el aviso de aplicación: " + err);
+  }
+}
+
+function formatearFechaAviso(f) {
+  const m = String(f || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? m[3] + "/" + m[2] + "/" + m[1] : String(f || "-");
+}
+
+// Correr UNA vez a mano desde el editor (menú "Ejecutar" → probarAvisoAplicacion):
+// Google pide autorizar el envío de mails y manda un aviso de ejemplo. Después de
+// autorizar, crear "Nueva versión" en Implementar → Administrar implementaciones.
+function probarAvisoAplicacion() {
+  enviarAvisoAplicacion({
+    fecha: Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd"),
+    contratistaNombre: "Contratista de prueba",
+    loteNombre: "Lote de prueba",
+    hectareas: 100,
+    producto1Nombre: "Glifosato", producto1Cantidad: 2, producto1Unidad: "lt/ha",
+    producto2Nombre: "2,4-D", producto2Cantidad: 0.5, producto2Unidad: "lt/ha",
+    ordenTrabajoNombre: "OT de prueba",
+    comentarios: "Este es un mail de prueba: no se guardó nada en la planilla.",
+  });
 }
 
 // Carpeta de Drive por tipo de registro, dentro de "App de Campo - Fotos/<EMPRESA_NOMBRE>/".
