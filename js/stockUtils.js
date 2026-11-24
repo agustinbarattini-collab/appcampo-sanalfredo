@@ -63,7 +63,10 @@ async function getSilosBolsaConStock() {
         (a.campaniaId || null) === (representante.campaniaId || null)
     );
     const finalizado = finalizadoPorAjuste || miembros.every((m) => m.finalizado);
-    const kgResidual = finalizado ? 0 : Math.max(0, kgTotalInicial - usado);
+    // Mientras no se finalice, el silo se sigue mostrando aunque el cálculo dé 0 o
+    // NEGATIVO (se sacó más de lo cargado: merma/error de carga). El saldo negativo se
+    // conserva a propósito: así el ajuste al finalizar sale con la diferencia real.
+    const kgResidual = finalizado ? 0 : Math.round((kgTotalInicial - usado) * 100) / 100;
 
     return {
       ...representante,

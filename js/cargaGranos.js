@@ -35,12 +35,12 @@ async function poblarOrigenSelect(select, tipo) {
       select.innerHTML += `<option value="${l.id}">${l.nombre}</option>`;
     }
   } else if (tipo === "silo") {
-    // Los silos finalizados o en 0 no se ofrecen como origen.
+    // Solo los silos finalizados dejan de ofrecerse como origen (aunque estén en 0 o en negativo).
     const silos = (await getSilosBolsaConStock())
-      .filter((s) => s.kgResidual > 0)
+      .filter((s) => !s.finalizado)
       .sort((a, b) => a.nombre.localeCompare(b.nombre));
     for (const s of silos) {
-      select.innerHTML += `<option value="${s.id}">${s.nombre}${s.campaniaNombre ? ` (${s.campaniaNombre})` : ""} — ${s.kgResidual} kg restantes${s.cultivo ? ` (${s.cultivo})` : ""}</option>`;
+      select.innerHTML += `<option value="${s.id}">${s.nombre}${s.campaniaNombre ? ` (${s.campaniaNombre})` : ""} — ${s.kgResidual < 0 ? "excedido en " + Math.abs(s.kgResidual) + " kg" : s.kgResidual + " kg restantes"}${s.cultivo ? ` (${s.cultivo})` : ""}</option>`;
     }
   }
 }
