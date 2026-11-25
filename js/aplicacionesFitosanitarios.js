@@ -493,8 +493,8 @@ const aplicacionesFitosanitariosView = {
 
       const contratista = contratistas.find((c) => c.id === contratistaId);
       const lote = lotes.find((l) => l.id === loteId);
-      const ordenId = fOrden.value;
-      const orden = ordenId ? ordenesConEstado.find((o) => o.id === ordenId) : null;
+      let ordenId = fOrden.value;
+      let orden = ordenId ? ordenesConEstado.find((o) => o.id === ordenId) : null;
 
       const productos = [];
       const avisos = [];
@@ -540,6 +540,38 @@ const aplicacionesFitosanitariosView = {
           `Según la cuenta de "${contratista.nombre}":\n${avisos.join("\n")}\n¿Confirmás igual?`
         );
         if (!continuar) return;
+      }
+
+      // Sin orden elegida: si el lote tiene órdenes pendientes se avisa, porque una
+      // aplicación suelta no marca la orden como realizada (ni en la app ni en la
+      // planilla de gestión). Si hay una sola se ofrece vincularla; si hay varias,
+      // se ofrece volver para elegir. Cancelar = guardar sin orden.
+      if (!orden) {
+        let candidatas = ordenesConEstado.filter(
+          (o) => o.estado !== "completada" && o.lotes.some((l) => l.loteId === loteId && !l.aplicado)
+        );
+        const mismoContratista = candidatas.filter((o) => o.contratistaId === contratistaId);
+        if (candidatas.length > 1 && mismoContratista.length > 0) candidatas = mismoContratista;
+        const detalle = (o) => `"${o.nombre}" (${o.contratistaNombre}${o.fechaLimite ? ", plazo " + formatearFechaCorta(o.fechaLimite) : ""})`;
+        if (candidatas.length === 1) {
+          const vincular = confirm(
+            `Esta aplicación no tiene orden de trabajo, y el lote "${lote ? lote.nombre : ""}" tiene una orden pendiente: ${detalle(candidatas[0])}.\n\n` +
+              `Si la cargás sin orden, esa orden va a seguir pendiente.\n\n` +
+              `Aceptar: vincular la aplicación a esa orden.\nCancelar: guardar sin orden.`
+          );
+          if (vincular) {
+            orden = candidatas[0];
+            ordenId = orden.id;
+          }
+        } else if (candidatas.length > 1) {
+          const volver = confirm(
+            `Esta aplicación no tiene orden de trabajo, y el lote "${lote ? lote.nombre : ""}" tiene ${candidatas.length} órdenes pendientes:\n` +
+              candidatas.map((o) => "• " + detalle(o)).join("\n") +
+              `\n\nSi la cargás sin orden, ninguna se marca como realizada.\n\n` +
+              `Aceptar: volver y elegir la orden.\nCancelar: guardar sin orden.`
+          );
+          if (volver) return;
+        }
       }
 
       const datos = {
