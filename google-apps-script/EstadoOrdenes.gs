@@ -143,6 +143,9 @@ function actualizarEstadoOrdenes() {
     celda.setNote("La llena sola el script EstadoOrdenes según lo que el aplicador cargó en Fitosanitarios (cada 10 minutos). No hace falta tocarla.");
     hoja.setColumnWidth(col, 260);
   }
+  // La columna puede haber heredado la validación de "estado" (Activa/Anulada) de la
+  // columna de al lado: se le quita, porque acá se escribe texto libre.
+  hoja.getRange(1, col, hoja.getMaxRows(), 1).clearDataValidations();
   const ultimaFila = hoja.getLastRow();
   if (ultimaFila < 2) return "Sin órdenes";
 
