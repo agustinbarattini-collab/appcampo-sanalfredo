@@ -138,6 +138,11 @@ function actualizarEstadoOrdenes() {
   let col = encabezados.indexOf(ESTADO_ORDENES_COLUMNA) + 1;
   if (col === 0) {
     col = ultimaCol + 1;
+    // En las apps con zona a aplicar, "zona" va justo después de "estado" y el
+    // Code.gs escribe su encabezado recién la primera vez que se marca una zona:
+    // si todavía no está, se le deja ese lugar libre para no ocuparlo.
+    const colEstado = encabezados.indexOf("estado") + 1;
+    if (colEstado > 0 && encabezados.indexOf("zona") === -1 && col === colEstado + 1) col++;
     const celda = hoja.getRange(1, col);
     celda.setValue(ESTADO_ORDENES_COLUMNA).setFontWeight("bold").setBackground("#d9ead3");
     celda.setNote("La llena sola el script EstadoOrdenes según lo que el aplicador cargó en Fitosanitarios (cada 10 minutos). No hace falta tocarla.");
